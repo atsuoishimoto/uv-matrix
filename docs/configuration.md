@@ -128,6 +128,10 @@ kind is fixed per field, never inferred from the contents:
 - an **expression** is evaluated as Python,
 - a **literal** is used as-is, never evaluated.
 
+A task's templates and expressions are evaluated **only at `run` time**, when
+jobs are actually built and executed. `list` merely enumerates the jobs and
+evaluates nothing — no template is rendered and no `when` expression is run.
+
 `run` — required, template
 : The command to run for the job.
 
