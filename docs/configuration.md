@@ -194,11 +194,6 @@ A job's Python version comes from one of three places, in order:
 3. **uv's default.** When neither supplies a version, the job runs without
    `--python` and uv selects the interpreter itself.
 
-```{warning}
-Templates are rendered with Jinja2 and `when` expressions are evaluated as
-Python, both with no sandbox. Only run `uv-matrix` in repositories you trust.
-```
-
 (templates)=
 ## Templates
 
