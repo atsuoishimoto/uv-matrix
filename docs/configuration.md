@@ -76,10 +76,23 @@ So the matrix above runs the `test` task once for each `python-version`.
 Matrices are independent and expanded separately, so different task groups can
 have completely different axes.
 
-```{note}
-`include` and `exclude` from GitHub Actions are not supported as a dedicated
-feature. Use a task `when` expression instead.
+### Matrix exclusions
+
+You can exclude specific combinations of matrix values using the `exclude` key (an array of tables matching axis values). Any expanded matrix cell that matches all keys of any exclusion rule will be skipped:
+
+```toml
+[tool.uv-matrix.matrix.test]
+python-version = ["3.12", "3.13"]
+mode = ["fast", "slow"]
+tasks = ["test"]
+
+[[tool.uv-matrix.matrix.test.exclude]]
+python-version = "3.13"
+mode = "slow"
 ```
+
+In this case, the `(3.13, slow)` combination will not be generated.
+
 
 ### Matrix expansion
 
