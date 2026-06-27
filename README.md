@@ -97,15 +97,22 @@ tasks = ["lint", "doc"]
 
 # Task definitions are reusable across matrices. `run` is the command to execute.
 [tool.uv-matrix.tasks.test]
-run = "pytest {{ posargs }}"   # {{ posargs }} expands to args passed after `--`
-extras = ["{{ webui }}"]   # adds `--extra <webui>`; the empty "" cell renders blank and is dropped
-when = "webui != 'django' or platform != 'win32'"   # run unless it's the django cell on Windows; a false `when` skips the job
+
+# {{ posargs }} expands to args passed after `--`.
+run = "pytest {{ posargs }}"
+
+# Optional extras to include in the job's environment.
+# The empty "" cell renders blank and is dropped.
+extras = ["{{ webui }}"]
+
+# run unless it's the django cell on Windows; a false `when` skips the job
+when = "webui != 'django' or platform != 'win32'"
 
 [tool.uv-matrix.tasks.lint]
 run = "ruff check ."
 
 [tool.uv-matrix.tasks.doc]
-groups = ["doc"]      # adds `--group doc` to the uv run command
+groups = ["doc"]      # Dependency groups to include in the job's environment
 run = "make html"
 cwd = "docs"          # run the command from this directory
 ```

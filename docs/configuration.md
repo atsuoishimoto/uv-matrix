@@ -241,7 +241,7 @@ template namespace.
 Template fields are Jinja2, so expressions and method calls work inside them:
 
 ```toml
-run = "pytest --junitxml=.reports/py{{ matrix['python-version'].replace('.', '') }}/pytest.xml"
+run = "pytest --junitxml=.reports/py{{ python_version.replace('.', '') }}/pytest.xml"
 ```
 
 Every matrix axis is exposed two ways: as a key in the `matrix` dict
@@ -270,7 +270,7 @@ flag such as `--group ""`. This lets a template conditionally omit an element:
 groups = ["{{ matrix['django'] or '' }}"]
 
 # --extra web is added only when the ui axis is 'cli'.
-extras = ["{{ matrix['ui'] == 'cli' and 'web' or '' }}"]
+extras = ["{{ ui == 'cli' and 'web' or '' }}"]
 ```
 
 Dropping is by empty string, not by falsiness, so a conditional element must

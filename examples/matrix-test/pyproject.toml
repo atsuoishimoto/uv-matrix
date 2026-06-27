@@ -7,6 +7,9 @@ authors = [
     { name = "Atsuo Ishimoto", email = "atsuoishimoto@gmail.com" }
 ]
 requires-python = ">=3.12"
+dependencies = [
+    "python-dotenv>=1.2.2",
+]
 
 [project.optional-dependencies]
 django = [
@@ -18,11 +21,13 @@ flask = [
 
 [dependency-groups]
 dev = [
+    "pytest>=9.1.1",
     "ruff>=0.15.20",
 ]
 doc = [
     "sphinx>=9.1.0",
 ]
+
 
 [tool.uv-matrix]
 continue-on-error = false
@@ -39,7 +44,7 @@ tasks = ["lint", "doc"]
 
 [tool.uv-matrix.tasks.test]
 run = "pytest {{ posargs }}"
-extras = ["{{ matrix['webui'] }}"]
+extras = ["{{ webui }}"]
 
 [tool.uv-matrix.tasks.lint]
 run = "ruff check {{ posargs }} ."
