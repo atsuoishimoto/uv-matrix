@@ -1,6 +1,6 @@
 [project]
 name = "uv-matrix"
-version = "0.0.1"
+version = "0.0.2"
 description = "A tiny matrix runner for Python projects using Astral uv."
 readme = "README.md"
 license = "MIT"
