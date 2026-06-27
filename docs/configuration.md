@@ -330,6 +330,13 @@ run = "ruff check ."
   Example: `{{ environ['HOME'] }}` renders to the caller's home directory, and
   `when = "environ.get('CI')"` runs the task only under CI.
 
+`platform`
+: `sys.platform` of the running interpreter — a string identifying the OS (e.g.
+  `'linux'`, `'darwin'`, `'win32'`). Useful to gate a job by OS in a `when`
+  expression.
+  Example value `'linux'`, so `when = "platform == 'win32'"` skips the job
+  except on Windows.
+
 Used together in a `run` template:
 
 ```toml

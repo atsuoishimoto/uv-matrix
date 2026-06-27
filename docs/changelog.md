@@ -33,6 +33,9 @@ Early development. The core works:
 - `environ`: a copy of the process environment (`os.environ`) is exposed to
   templates and expressions, e.g. `{{ environ['HOME'] }}` or
   `when = "environ.get('CI')"`.
+- `platform`: `sys.platform` of the running interpreter (e.g. `'linux'`,
+  `'darwin'`, `'win32'`) is exposed to templates and expressions, so a `when`
+  can gate a job by OS (`when = "platform == 'win32'"`).
 - `continue-on-error` (settable per task and globally in `[tool.uv-matrix]`)
   controls whether a failing job stops the run (`false`, the default) or lets the
   remaining jobs run (`true`); a failure always counts toward the exit code.
