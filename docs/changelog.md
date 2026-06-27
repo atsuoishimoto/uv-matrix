@@ -45,3 +45,9 @@ Early development. The core works:
   Parallel runs capture each job's output and print it as a per-job block; jobs
   sharing an environment are serialized; sequential runs still stream output
   live without capture.
+- Verbosity now gates the per-job banner in tiers: the default prints only the
+  `==> <label>` header, `-v` adds the `uv run` command line, and `-vv` adds the
+  job's environment directory. Below `-vv`, `uv` is run with `--quiet` so its
+  environment chatter (creating/removing virtual environments, resolving and
+  installing dependencies) is hidden; `-vv` lets it through and each further
+  `-v` is forwarded to `uv`. A job's own command output is always shown.

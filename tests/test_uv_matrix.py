@@ -1037,6 +1037,90 @@ def test_run_quiet_suppresses_progress(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
+def test_uv_verbosity_flags():
+    from uv_matrix.cli import _uv_verbosity_flags
+
+    # Below -vv, uv is told to stay quiet so its env chatter is hidden.
+    assert _uv_verbosity_flags(-1) == ["--quiet"]
+    assert _uv_verbosity_flags(0) == ["--quiet"]
+    assert _uv_verbosity_flags(1) == ["--quiet"]
+    # At -vv uv keeps its default output; extra -v's forward to uv as its own -v.
+    assert _uv_verbosity_flags(2) == []
+    assert _uv_verbosity_flags(3) == ["--verbose"]
+    assert _uv_verbosity_flags(4) == ["--verbose", "--verbose"]
+
+
+def test_job_command_splices_uv_flags_after_run():
+    from uv_matrix.cli import _job_command
+
+    job = _simple_job()
+    assert job.command[:2] == ["uv", "run"]
+    # The flag lands right after `uv run`, before the job's own arguments.
+    assert _job_command(job, 0)[:3] == ["uv", "run", "--quiet"]
+    assert _job_command(job, 0)[3:] == job.command[2:]
+    # At -vv no flag is added, so the command is the job's command verbatim.
+    assert _job_command(job, 2) == job.command
+
+
+def _banner_run(tmp_path, monkeypatch, capsys, argv):
+    """Run a single-job project with a stubbed subprocess; return (out, command)."""
+    import subprocess
+
+    from uv_matrix.cli import main
+
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    seen = []
+
+    def fake_run(command, **kwargs):
+        seen.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    rc = main(argv)
+    assert rc == 0
+    return capsys.readouterr().out, seen[0]
+
+
+def test_banner_default_shows_only_label(tmp_path, monkeypatch, capsys):
+    # Default verbosity: the label header only — no command, no env line.
+    out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run"])
+    assert "==> m:t python=3.11" in out
+    assert "  + " not in out
+    assert "env:" not in out
+    # uv is run with --quiet so its environment chatter stays hidden.
+    assert command[:3] == ["uv", "run", "--quiet"]
+
+
+def test_banner_verbose_adds_command_line(tmp_path, monkeypatch, capsys):
+    # -v adds the command line (as written, without uv's own --quiet) but not env.
+    out, _ = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-v"])
+    assert "  + uv run --python 3.11 sh -c x" in out
+    assert "--quiet" not in out
+    assert "env:" not in out
+
+
+def test_banner_very_verbose_adds_env_line(tmp_path, monkeypatch, capsys):
+    # -vv adds the env line, and uv keeps its default (chatty) output.
+    out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-vv"])
+    assert "  + uv run --python 3.11 sh -c x" in out
+    assert "  env: .uv-matrix/py3.11-" in out
+    assert "--quiet" not in command
+
+
+def test_dry_run_shows_command_at_default_verbosity(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # --dry-run previews commands, so the command line shows even without -v;
+    # it is the command as written, without uv's --quiet.
+    assert main(["run", "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "  + uv run --python 3.11 sh -c x" in out
+    assert "env:" not in out
+
+
 def test_load_config_missing_table(tmp_path):
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text("[project]\nname = 'x'\n", encoding="utf-8")

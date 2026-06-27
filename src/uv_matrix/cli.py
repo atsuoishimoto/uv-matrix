@@ -162,10 +162,52 @@ def _parallelism(config: dict[str, Any], args: argparse.Namespace) -> int:
     return max(1, n)
 
 
-def _print_job_banner(job: Job, style: _Style, verbosity: int) -> None:
-    if verbosity >= 0:
-        print(style("bold", f"==> {job.label}"))
+def _uv_verbosity_flags(verbosity: int) -> list[str]:
+    """uv's own output verbosity, derived from uv-matrix's net verbosity.
+
+    Below ``-vv`` uv runs ``--quiet`` so its environment chatter — creating and
+    removing virtual environments, resolving and installing dependencies — stays
+    hidden; the job's own command output is never affected. At ``-vv`` uv keeps
+    its default output (so that chatter appears), and each ``-v`` beyond the
+    second is forwarded to uv as its own ``-v`` for progressively more detail.
+    """
+    if verbosity < 2:
+        return ["--quiet"]
+    return ["--verbose"] * (verbosity - 2)
+
+
+def _job_command(job: Job, verbosity: int) -> list[str]:
+    """The job's ``uv run`` command with uv's verbosity flags spliced in.
+
+    The flags follow the ``uv run`` prefix and precede everything else, so they
+    apply to uv rather than to the job's own command. The banner deliberately
+    shows ``job.command_str`` without them — the command as written, not the
+    verbosity uv-matrix layers on for this invocation.
+    """
+    return [*job.command[:2], *_uv_verbosity_flags(verbosity), *job.command[2:]]
+
+
+def _print_job_banner(
+    job: Job, style: _Style, verbosity: int, *, show_command: bool = False
+) -> None:
+    """Print the per-job banner, gating each line by verbosity.
+
+    The lines, from least to most detail:
+
+    * ``==> <label>`` — which job is running; shown at the default level.
+    * ``  + <command>`` — the ``uv run`` command as written (uv's own
+      ``--quiet``/``-v`` flags are omitted); shown at ``-v``, and always under
+      ``--dry-run``, whose purpose is to preview commands.
+    * ``  env: <dir>`` — the job's isolated environment directory; shown at ``-vv``.
+
+    A net ``-q`` (verbosity below zero) suppresses the banner entirely.
+    """
+    if verbosity < 0:
+        return
+    print(style("bold", f"==> {job.label}"))
+    if show_command or verbosity >= 1:
         print(style("dim", f"  + {job.command_str}"))
+    if verbosity >= 2:
         print(style("dim", f"  env: {ENV_DIR}/{job.env_key}"))
 
 
@@ -211,7 +253,7 @@ def _run_sequential(
     for job in runnable:
         _print_job_banner(job, style, verbosity)
         env = _job_env(job, root)
-        result = subprocess.run(job.command, env=env, cwd=job.cwd)
+        result = subprocess.run(_job_command(job, verbosity), env=env, cwd=job.cwd)
         if _record_result(job, result.returncode, style, failed):
             break
     return failed
@@ -247,7 +289,7 @@ def _run_parallel(
         env = _job_env(job, root)
         with env_lock(job.env_key):
             return subprocess.run(
-                job.command,
+                _job_command(job, verbosity),
                 env=env,
                 cwd=job.cwd,
                 stdout=subprocess.PIPE,
@@ -305,7 +347,7 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
     failed: list[tuple[Job, int]] = []
     if args.dry_run:
         for job in runnable:
-            _print_job_banner(job, style, verbosity)
+            _print_job_banner(job, style, verbosity, show_command=True)
     elif parallel > 1:
         failed = _run_parallel(runnable, root, parallel, style, verbosity)
     else:
@@ -374,9 +416,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p = sub.add_parser("run", parents=[common], help="expand the matrices and run jobs")
     run_p.add_argument("-m", "--matrix", metavar="NAME", help="run only the matrix with this name")
     run_p.add_argument("-t", "--task", metavar="NAME", help="run only the task with this name")
-    run_p.add_argument(
-        "-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP
-    )
+    run_p.add_argument("-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP)
     run_p.add_argument(
         "-d", "--dry-run", action="store_true", help="print commands without running them"
     )
@@ -400,9 +440,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "list", parents=[common], help="list selectable jobs without evaluating or running them"
     )
     list_p.add_argument("task", nargs="?", help="show only this task")
-    list_p.add_argument(
-        "-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP
-    )
+    list_p.add_argument("-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP)
     list_p.set_defaults(func=_cmd_list)
 
     return parser

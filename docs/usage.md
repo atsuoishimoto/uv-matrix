@@ -30,10 +30,18 @@ uv-matrix list                # list selectable jobs (no evaluation, no run)
 ### `run`
 
 Expands every matrix, resolves each `(cell, task)` pair into a job, and runs the
-jobs sequentially. Each job prints its name and the environment it runs in:
+jobs sequentially. By default each job prints just its name:
 
 ```text
 ==> test:test python-version=3.11
+```
+
+The banner gains detail with `-v` (see {ref}`verbosity`): `-v` adds the `uv run`
+command line, and `-vv` adds the job's isolated environment directory:
+
+```text
+==> test:test python-version=3.11
+  + uv run --python 3.11 sh -c pytest
   env: .uv-matrix/py3.11-1a2b3c4d
 ```
 
@@ -167,9 +175,20 @@ subcommand, e.g. `uv-matrix run -v --no-color`):
 : Use `DIR` as the project root (and `DIR/pyproject.toml` as the config, unless
   `--config` is also given). uv-matrix changes to this directory before running.
 
+(verbosity)=
+
 `-v`, `--verbose`
-: Increase verbosity (repeatable). At `-v`, `run` also reports jobs skipped by a
-  `when` condition.
+: Increase verbosity (repeatable). Each level adds detail to a `run`:
+
+  - `-v` adds the `uv run` command line to each job's banner and names jobs
+    skipped by a `when` condition.
+  - `-vv` adds the job's isolated environment directory, and lets uv print its
+    own environment chatter — creating and removing virtual environments,
+    resolving and installing dependencies — which is otherwise hidden by running
+    `uv` with `--quiet`. Each further `-v` is forwarded to `uv` as its own `-v`.
+
+  A job's command output (e.g. test results) is always shown, regardless of the
+  level.
 
 `-q`, `--quiet`
 : Decrease verbosity (repeatable). At `-q`, `run` prints only failures.
