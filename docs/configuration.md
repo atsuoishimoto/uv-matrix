@@ -197,7 +197,6 @@ A job's Python version comes from one of three places, in order:
 ```{warning}
 Templates are rendered with Jinja2 and `when` expressions are evaluated as
 Python, both with no sandbox. Only run `uv-matrix` in repositories you trust.
-See {doc}`security`.
 ```
 
 (templates)=
