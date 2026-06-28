@@ -82,7 +82,7 @@ doc = [
 continue-on-error = false  # stop the run on the first failing job (the default)
 max-jobs = 4               # run up to 4 jobs at once (1 = sequential)
 
-# A matrix named "test": every key except `tasks` is an axis, and the axes are
+# A matrix named "test": `python-version` and `webui` are axes, and the axes are
 # combined as a cartesian product (here 2 x 3 = 6 cells).
 [tool.uv-matrix.matrix.test]
 python-version = ["3.12", "3.13"]   # reserved axis: inherited as `uv run --python`
@@ -138,7 +138,7 @@ checks:lint  python-version=3.13
 checks:doc   python-version=3.13
 ```
 
-Inside a matrix, every key except `tasks` defines an axis. The special `python-version` axis is inherited by tasks that do not set their own Python version.
+Inside a matrix, every key except `tasks` and `exclude` defines an axis. The special `python-version` axis is inherited by tasks that do not set their own Python version.
 
 Commands are executed through `uv run`. Each job runs in its own isolated environment rather than the project's `.venv`. For example, the `test` task above runs roughly like this on Linux:
 

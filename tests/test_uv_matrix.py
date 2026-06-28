@@ -319,9 +319,7 @@ def test_resolve_job_skips_empty_rendered_list_elements():
         "--extra",
         "cli",
         "--with",
-        "sh",
-        "-c",
-        "pytest",
+        *_shell_command("pytest"),
     ]
 
 
@@ -335,9 +333,7 @@ def test_resolve_job_strips_rendered_list_elements():
         "3.12",
         "--group",
         "test",
-        "sh",
-        "-c",
-        "pytest",
+        *_shell_command("pytest"),
     ]
 
 
@@ -1285,3 +1281,121 @@ def test_load_config_reads_table(tmp_path):
     config = load_config(pyproject)
     assert config["continue-on-error"] is True
     assert config["matrix"]["test"] == {"python": ["3.13"], "tasks": ["test"]}
+
+
+def test_iter_plan_excludes_matching_jobs():
+    config = {
+        "matrix": {
+            # Case 1: Platform-Specific Package/C-Extension Failures
+            "case1": {
+                "platform": ["linux", "windows", "macos"],
+                "database": ["sqlite", "postgresql"],
+                "tasks": ["test"],
+                "exclude": [
+                    {"platform": "windows", "database": "postgresql"}
+                ]
+            },
+            # Case 2: Python Version & Dependency Version Incompatibility
+            "case2": {
+                "python-version": ["3.10", "3.11", "3.12", "3.13"],
+                "django-version": ["django42", "django50", "django51"],
+                "tasks": ["test"],
+                "exclude": [
+                    {"python-version": "3.13", "django-version": "django42"}
+                ]
+            },
+            # Case 3: Redundant Multi-Axis Combinations
+            "case3": {
+                "python-version": ["3.10", "3.11", "3.12", "3.13"],
+                "coverage": [True, False],
+                "tasks": ["test"],
+                "exclude": [
+                    {"python-version": "3.10", "coverage": True},
+                    {"python-version": "3.11", "coverage": True},
+                    {"python-version": "3.12", "coverage": True},
+                ]
+            },
+            # Case 4: Environment & Build Type Mismatches
+            "case4": {
+                "env": ["dev", "prod"],
+                "build-type": ["debug", "release"],
+                "tasks": ["test"],
+                "exclude": [
+                    {"env": "dev", "build-type": "release"},
+                    {"env": "prod", "build-type": "debug"}
+                ]
+            }
+        }
+    }
+
+    plan = list(iter_plan(config))
+
+    # Verify Case 1
+    case1_jobs = [cell for name, cell, task in plan if name == "case1"]
+    assert len(case1_jobs) == 5  # 3 * 2 - 1 excluded
+    assert {"platform": "windows", "database": "postgresql"} not in case1_jobs
+    assert {"platform": "linux", "database": "postgresql"} in case1_jobs
+    assert {"platform": "windows", "database": "sqlite"} in case1_jobs
+
+    # Verify Case 2
+    case2_jobs = [cell for name, cell, task in plan if name == "case2"]
+    assert len(case2_jobs) == 11  # 4 * 3 - 1 excluded
+    assert {"python-version": "3.13", "django-version": "django42"} not in case2_jobs
+    assert {"python-version": "3.13", "django-version": "django50"} in case2_jobs
+    assert {"python-version": "3.12", "django-version": "django42"} in case2_jobs
+
+    # Verify Case 3
+    case3_jobs = [cell for name, cell, task in plan if name == "case3"]
+    assert len(case3_jobs) == 5  # 4 * 2 - 3 excluded
+    assert {"python-version": "3.10", "coverage": True} not in case3_jobs
+    assert {"python-version": "3.13", "coverage": True} in case3_jobs
+    assert {"python-version": "3.10", "coverage": False} in case3_jobs
+
+    # Verify Case 4
+    case4_jobs = [cell for name, cell, task in plan if name == "case4"]
+    assert len(case4_jobs) == 2  # 2 * 2 - 2 excluded
+    assert {"env": "dev", "build-type": "debug"} in case4_jobs
+    assert {"env": "prod", "build-type": "release"} in case4_jobs
+    assert {"env": "dev", "build-type": "release"} not in case4_jobs
+    assert {"env": "prod", "build-type": "debug"} not in case4_jobs
+
+
+def test_iter_plan_exclude_invalid_structure():
+    # 'exclude' is not a list
+    config_not_list = {
+        "matrix": {
+            "test": {
+                "python": ["3.13"],
+                "tasks": ["test"],
+                "exclude": "not-a-list"
+            }
+        }
+    }
+    with pytest.raises(ConfigError, match="'exclude' must be an array"):
+        list(iter_plan(config_not_list))
+
+    # 'exclude' items are not dicts
+    config_items_not_dicts = {
+        "matrix": {
+            "test": {
+                "python": ["3.13"],
+                "tasks": ["test"],
+                "exclude": ["not-a-dict"]
+            }
+        }
+    }
+    with pytest.raises(ConfigError, match="'exclude' items must be tables"):
+        list(iter_plan(config_items_not_dicts))
+
+    # 'exclude' keys are not valid axes
+    config_invalid_key = {
+        "matrix": {
+            "test": {
+                "python": ["3.13"],
+                "tasks": ["test"],
+                "exclude": [{"python-version": "3.13"}]
+            }
+        }
+    }
+    with pytest.raises(ConfigError, match="'exclude' item key 'python-version' is not a valid axis"):
+        list(iter_plan(config_invalid_key))
