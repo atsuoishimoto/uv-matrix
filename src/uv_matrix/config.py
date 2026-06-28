@@ -175,6 +175,12 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
         task_names = matrix_def[TASKS_KEY]
         if not isinstance(task_names, list):
             raise ConfigError(f"matrix {matrix_name!r}: 'tasks' must be an array")
+        for task_name in task_names:
+            if not isinstance(task_name, str):
+                raise ConfigError(
+                    f"matrix {matrix_name!r}: 'tasks' entries must be strings, "
+                    f"got {task_name!r}"
+                )
 
         axes = matrix_axes(matrix_def)
         for cell in expand_matrix(axes):
