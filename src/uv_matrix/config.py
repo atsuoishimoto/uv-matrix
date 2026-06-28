@@ -83,7 +83,7 @@ def validate_config_names(config: dict[str, Any]) -> None:
             continue
         seen: dict[str, str] = {}
         for key in matrix_def:
-            if key == TASKS_KEY:
+            if key in (TASKS_KEY, EXCLUDE_KEY):
                 continue
             validate_name(key, "matrix axis name")
             alias = key.replace("-", "_")
@@ -196,10 +196,11 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
 
         for cell in expand_matrix(axes):
             should_exclude = False
-            for rule in exclude_rules:
-                if all(str(cell.get(key)) == str(val) for key, val in rule.items()):
-                    should_exclude = True
-                    break
+            for exclude_rule in exclude_rules:
+                if exclude_rule:
+                    # all(exclude_rules) returns True if exclude_rules is empty.
+                    if all(cell.get(key) == val for key, val in exclude_rule.items()):
+                        should_exclude = True
             if should_exclude:
                 continue
 
