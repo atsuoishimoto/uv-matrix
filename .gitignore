@@ -12,3 +12,7 @@ wheels/
 
 # Sphinx documentation build output
 docs/_build/
+
+# Claude Code local/private files
+CLAUDE.local.md
+.claude/settings.local.json
