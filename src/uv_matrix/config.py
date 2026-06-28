@@ -16,9 +16,12 @@ else:  # Python 3.10 has no stdlib tomllib; tomli is its backport.
 
 CONFIG_TABLE = "uv-matrix"
 
-# Reserved key inside a matrix table: the list of task names to run for that
-# matrix. Every other key in a matrix table is a matrix axis.
+# Reserved keys inside a matrix table:
+# - 'tasks': the list of task names to run.
+# - 'exclude': matrix-level job exclusion rules.
+# Every other key in a matrix table is a matrix axis.
 TASKS_KEY = "tasks"
+EXCLUDE_KEY = "exclude"
 
 # Table that holds the task definitions: [tool.uv-matrix.tasks.<name>]. It shares
 # the "tasks" spelling with the matrix reserved key above so there is a single
@@ -80,7 +83,7 @@ def validate_config_names(config: dict[str, Any]) -> None:
             continue
         seen: dict[str, str] = {}
         for key in matrix_def:
-            if key == TASKS_KEY:
+            if key in (TASKS_KEY, EXCLUDE_KEY):
                 continue
             validate_name(key, "matrix axis name")
             alias = key.replace("-", "_")
@@ -95,13 +98,15 @@ def validate_config_names(config: dict[str, Any]) -> None:
 
 
 def matrix_axes(matrix_def: dict[str, Any]) -> dict[str, Any]:
-    """Return a matrix table's axes: every key except the reserved ``tasks``.
+    """Return a matrix table's axes: every key except the reserved ``tasks`` and ``exclude``.
 
     Each axis name is validated, so callers reading axes consistently reject a
     name that does not follow Python's variable rules (plus ``-``).
     """
     return {
-        validate_axis_name(key): value for key, value in matrix_def.items() if key != TASKS_KEY
+        validate_axis_name(key): value
+        for key, value in matrix_def.items()
+        if key not in (TASKS_KEY, EXCLUDE_KEY)
     }
 
 
@@ -160,8 +165,8 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
     """Yield ``(matrix_name, cell, task_name)`` for every job in the config.
 
     Each named matrix is expanded independently: its axes (every key except the
-    reserved ``tasks``) form a cartesian product, and each resulting cell is
-    paired with each task name listed in ``tasks``.
+    reserved ``tasks`` and ``exclude``) form a cartesian product, and each resulting
+    cell is paired with each task name listed in ``tasks``.
     """
     matrices = config.get("matrix", {})
     if not matrices:
@@ -183,7 +188,28 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
                 )
 
         axes = matrix_axes(matrix_def)
+        exclude_rules = matrix_def.get(EXCLUDE_KEY, [])
+        if not isinstance(exclude_rules, list):
+            raise ConfigError(f"matrix {matrix_name!r}: 'exclude' must be an array")
+        for rule in exclude_rules:
+            if not isinstance(rule, dict):
+                raise ConfigError(f"matrix {matrix_name!r}: 'exclude' items must be tables")
+            for key in rule:
+                if key not in axes:
+                    raise ConfigError(
+                        f"matrix {matrix_name!r}: 'exclude' item key {key!r} is not a valid axis"
+                    )
+
         for cell in expand_matrix(axes):
+            should_exclude = False
+            for exclude_rule in exclude_rules:
+                if exclude_rule:
+                    # all(exclude_rules) returns True if exclude_rules is empty.
+                    if all(cell.get(key) == val for key, val in exclude_rule.items()):
+                        should_exclude = True
+            if should_exclude:
+                continue
+
             for task_name in task_names:
                 yield matrix_name, cell, task_name
 

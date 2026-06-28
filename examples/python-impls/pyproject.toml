@@ -1,0 +1,25 @@
+[project]
+name = "python-impls"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv-matrix]
+continue-on-error = false
+max-jobs=4
+
+[tool.uv-matrix.matrix.test]
+impl = ["cpython", "pyodide", "graalpy"]
+version = ["3.11", "3.12", "3.13", "3.14"]
+tasks = ["show-version"]
+
+# Skip missing versions
+exclude = [{impl="pyodide", version="3.11"},
+           {impl="graalpy", version="3.13"},
+           {impl="graalpy", version="3.14"}]
+
+[tool.uv-matrix.tasks.show-version]
+python-version = "{{ impl }}@{{ version }}"
+run = "python -VV"
