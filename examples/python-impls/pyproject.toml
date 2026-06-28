@@ -6,10 +6,6 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
-[tool.uv-matrix]
-continue-on-error = false
-max-jobs=4
-
 [tool.uv-matrix.matrix.test]
 impl = ["cpython", "pyodide", "graalpy"]
 version = ["3.11", "3.12", "3.13", "3.14"]

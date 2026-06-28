@@ -1291,18 +1291,14 @@ def test_iter_plan_excludes_matching_jobs():
                 "platform": ["linux", "windows", "macos"],
                 "database": ["sqlite", "postgresql"],
                 "tasks": ["test"],
-                "exclude": [
-                    {"platform": "windows", "database": "postgresql"}
-                ]
+                "exclude": [{"platform": "windows", "database": "postgresql"}],
             },
             # Case 2: Python Version & Dependency Version Incompatibility
             "case2": {
                 "python-version": ["3.10", "3.11", "3.12", "3.13"],
                 "django-version": ["django42", "django50", "django51"],
                 "tasks": ["test"],
-                "exclude": [
-                    {"python-version": "3.13", "django-version": "django42"}
-                ]
+                "exclude": [{"python-version": "3.13", "django-version": "django42"}],
             },
             # Case 3: Redundant Multi-Axis Combinations
             "case3": {
@@ -1313,7 +1309,7 @@ def test_iter_plan_excludes_matching_jobs():
                     {"python-version": "3.10", "coverage": True},
                     {"python-version": "3.11", "coverage": True},
                     {"python-version": "3.12", "coverage": True},
-                ]
+                ],
             },
             # Case 4: Environment & Build Type Mismatches
             "case4": {
@@ -1322,9 +1318,9 @@ def test_iter_plan_excludes_matching_jobs():
                 "tasks": ["test"],
                 "exclude": [
                     {"env": "dev", "build-type": "release"},
-                    {"env": "prod", "build-type": "debug"}
-                ]
-            }
+                    {"env": "prod", "build-type": "debug"},
+                ],
+            },
         }
     }
 
@@ -1363,26 +1359,14 @@ def test_iter_plan_excludes_matching_jobs():
 def test_iter_plan_exclude_invalid_structure():
     # 'exclude' is not a list
     config_not_list = {
-        "matrix": {
-            "test": {
-                "python": ["3.13"],
-                "tasks": ["test"],
-                "exclude": "not-a-list"
-            }
-        }
+        "matrix": {"test": {"python": ["3.13"], "tasks": ["test"], "exclude": "not-a-list"}}
     }
     with pytest.raises(ConfigError, match="'exclude' must be an array"):
         list(iter_plan(config_not_list))
 
     # 'exclude' items are not dicts
     config_items_not_dicts = {
-        "matrix": {
-            "test": {
-                "python": ["3.13"],
-                "tasks": ["test"],
-                "exclude": ["not-a-dict"]
-            }
-        }
+        "matrix": {"test": {"python": ["3.13"], "tasks": ["test"], "exclude": ["not-a-dict"]}}
     }
     with pytest.raises(ConfigError, match="'exclude' items must be tables"):
         list(iter_plan(config_items_not_dicts))
@@ -1393,9 +1377,11 @@ def test_iter_plan_exclude_invalid_structure():
             "test": {
                 "python": ["3.13"],
                 "tasks": ["test"],
-                "exclude": [{"python-version": "3.13"}]
+                "exclude": [{"python-version": "3.13"}],
             }
         }
     }
-    with pytest.raises(ConfigError, match="'exclude' item key 'python-version' is not a valid axis"):
+    with pytest.raises(
+        ConfigError, match="'exclude' item key 'python-version' is not a valid axis"
+    ):
         list(iter_plan(config_invalid_key))

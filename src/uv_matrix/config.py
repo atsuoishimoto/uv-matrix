@@ -183,8 +183,7 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
         for task_name in task_names:
             if not isinstance(task_name, str):
                 raise ConfigError(
-                    f"matrix {matrix_name!r}: 'tasks' entries must be strings, "
-                    f"got {task_name!r}"
+                    f"matrix {matrix_name!r}: 'tasks' entries must be strings, got {task_name!r}"
                 )
 
         axes = matrix_axes(matrix_def)
