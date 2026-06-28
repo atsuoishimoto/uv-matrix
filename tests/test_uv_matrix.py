@@ -135,6 +135,12 @@ def test_iter_plan_rejects_invalid_axis_name():
         list(iter_plan(config))
 
 
+def test_iter_plan_rejects_non_string_task_name():
+    config = {"matrix": {"m": {"python": ["3.13"], "tasks": [1]}}}
+    with pytest.raises(ConfigError, match="must be strings"):
+        list(iter_plan(config))
+
+
 def test_axis_values_rejects_invalid_axis_name():
     config = {"matrix": {"m": {"bad name": ["x"], "tasks": ["t"]}}}
     with pytest.raises(ConfigError):
