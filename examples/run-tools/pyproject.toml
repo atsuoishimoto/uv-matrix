@@ -7,11 +7,17 @@ requires-python = ">=3.14"
 dependencies = []
 
 [tool.uv-matrix.matrix.checks]
-tasks = ["lint", "format"]
+tasks = ["lint", "mypy"]
 
 [tool.uv-matrix.tasks.lint]
 run = "ruff check ."
 
-[tool.uv-matrix.tasks.format]
-run = "ruff format ."
+[tool.uv-matrix.tasks.mypy]
+run = "mypy ."
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "ruff>=0.15.20",
+]
 
