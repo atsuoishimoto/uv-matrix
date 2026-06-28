@@ -33,9 +33,16 @@ jobs:
           set -euo pipefail
           rm -rf dist
           uv build
-          (cd dist && sha256sum * > checksums.txt)
           echo "----- artifacts -----"
           ls -la dist
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      - name: Create checksum
+        run: |
+          set -euo pipefail
+          cd dist && sha256sum * > checksums.txt
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
@@ -48,3 +55,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ inputs.tag }}" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+
