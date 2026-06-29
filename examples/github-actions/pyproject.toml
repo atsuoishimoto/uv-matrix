@@ -1,0 +1,22 @@
+[project]
+name = "github-actions"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+# uv-matrix is a dev dependency so `uv run uv-matrix` works in CI.
+dev = [
+    "pytest>=8",
+    "uv-matrix>=0.0.3",
+]
+
+# One matrix, one axis: the Python version. Each GitHub Actions job picks a
+# single value off this axis with `--filter python-version=...`, so the GA job
+# matrix and this axis are kept in sync (same five strings in both places).
+[tool.uv-matrix.matrix.test]
+python-version = ["3.10", "3.11", "3.12", "3.13", "3.14"]
+tasks = ["test"]
+
+[tool.uv-matrix.tasks.test]
+run = "pytest -q"

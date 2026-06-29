@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Let every Python version finish even if one fails (GitHub Actions'
+      # fail-fast, independent of uv-matrix's own continue-on-error).
+      fail-fast: false
+      matrix:
+        # Keep these in sync with the `python-version` axis in pyproject.toml.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      # Run only the matrix cell for this job's Python version. uv downloads the
+      # interpreter on demand, so there is no separate install step. The other
+      # versions run in their own parallel GitHub Actions jobs.
+      - name: Run the test matrix
+        run: uv run uv-matrix run --matrix test --filter python-version=${{ matrix.python-version }}
