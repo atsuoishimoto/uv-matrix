@@ -32,7 +32,6 @@ strategy:
   matrix:
     python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
 steps:
-  - run: uv python install ${{ matrix.python-version }}
   - run: uv run uv-matrix run --matrix test --filter python-version=${{ matrix.python-version }}
 ```
 
@@ -46,9 +45,9 @@ versions run in parallel.
   one of the axis's values (a typo is an error, not a silent no-op), so the
   GitHub Actions `matrix.python-version` and the `pyproject.toml`
   `python-version` axis are kept in sync by hand.
-- **Install only what the job needs.** uv-matrix delegates interpreter
-  management to uv; since each job tests one version, `uv python install
-  ${{ matrix.python-version }}` is enough — no need to install all five.
+- **No interpreter install step.** uv-matrix delegates interpreter management to
+  uv, and `uv run --python X` downloads a missing interpreter on demand, so the
+  job needs no separate `uv python install`.
 - **Multiple cells per version still run on one runner.** If the matrix had a
   second axis (say `webui = ["", "django", "flask"]`), filtering by
   `python-version` would leave several cells for that job; add `--max-jobs N` to
