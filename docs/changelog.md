@@ -1,5 +1,7 @@
 # Changelog
 
+## 0.0.4
+
 ## 0.0.3 2026/06/29
 
 - Added matrix-level `exclude` support: a matrix table may list `exclude` rules
