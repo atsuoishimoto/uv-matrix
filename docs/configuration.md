@@ -3,7 +3,8 @@
 All configuration lives under `[tool.uv-matrix]` in `pyproject.toml`, in three
 kinds of table:
 
-- `[tool.uv-matrix]` — top-level settings (`continue-on-error`, `max-jobs`, `vars`).
+- `[tool.uv-matrix]` — top-level settings (`continue-on-error`, `max-jobs`,
+  `vars`, `env`, `envfile`).
 - `[tool.uv-matrix.matrix.<name>]` — a **matrix**: the axes to expand and the
   tasks to run for it.
 - `[tool.uv-matrix.tasks.<name>]` — a **task**: a reusable command plus the
@@ -52,6 +53,18 @@ Keys set directly under `[tool.uv-matrix]`:
 
 `vars`
 : Global literal variables, exposed to every task's templates as `{{ vars }}`.
+
+`envfile`
+: Path(s) to `.env`-style files whose variables are added to **every** job's
+  environment. Same form and rules as the per-task `envfile` (a template or a
+  list of templates; a missing file is an error). A task's own `envfile`/`env`
+  override a same-named variable for that task's jobs only. See
+  {ref}`environment`.
+
+`env`
+: Environment variables applied to **every** job (keys literal, values Jinja2
+  templates). Overrides the top-level `envfile`; overridden per task by the
+  task's own `envfile`/`env`. See {ref}`environment`.
 
 ## Matrices
 
@@ -173,12 +186,15 @@ evaluates nothing — no template is rendered and no `when` expression is run.
 : Path(s) to `.env`-style files whose variables are added to the job's
   environment. Each path is a template (so it may read `matrix`/`vars`/`environ`).
   With a list, a later file overrides an earlier one on a shared key, and `env`
-  (below) overrides them all. A path that names no existing file is an error. See
+  (below) overrides them all. A path that names no existing file is an error.
+  Layered on top of the top-level `[tool.uv-matrix]` `envfile`/`env`, so it
+  overrides a same-named variable for this task's jobs only. See
   {ref}`environment`.
 
 `env` — optional, map of templates
 : Environment variables for the job (keys literal, values templated). Override
-  any same-named variable from `envfile`. See {ref}`environment`.
+  any same-named variable from `envfile` and from the top-level
+  `[tool.uv-matrix]` `envfile`/`env`. See {ref}`environment`.
 
 `cwd` — optional, template
 : The working directory the command runs in.
@@ -225,21 +241,32 @@ A job's Python version comes from one of three places, in order:
 (environment)=
 ### The job environment
 
-A job's environment variables come from three layers, lowest precedence first:
+A job's environment variables come from five layers, lowest precedence first:
 
 1. **The process environment** (`os.environ`) uv-matrix inherited.
-2. **`envfile`** — variables parsed from the `.env`-style file(s) the task names.
-3. **`env`** — the task's own map, which overrides any same-named variable above.
+2. **Top-level `envfile`** — file(s) named by `[tool.uv-matrix] envfile`, shared
+   by every job.
+3. **Top-level `env`** — the `[tool.uv-matrix] env` map, shared by every job.
+4. **The task's `envfile`** — file(s) the task names.
+5. **The task's `env`** — the task's own map.
+
+A later layer overrides an earlier one on a shared key: within each level `env`
+wins over `envfile`, and the whole task level sits above the top level, so a
+task's `envfile`/`env` override the shared settings for that task's jobs only.
 
 These layers are resolved **first, before any other task field is evaluated**, and
-the result is folded into the `environ` namespace. So every later field — `run`,
-`cwd`, `groups`, and even `when` — reads the final, post-override values through
-`{{ environ['X'] }}`:
+the result is folded into the `environ` namespace after each step. So a task's
+`envfile` path or `env` value can read the top-level values, and every later
+field — `run`, `cwd`, `groups`, and even `when` — reads the final,
+post-override values through `{{ environ['X'] }}`:
 
 ```toml
+[tool.uv-matrix]
+env = { DATABASE_URL = "sqlite:///base.db" }   # shared by every job
+
 [tool.uv-matrix.tasks.test]
-envfile = ".env"                    # e.g. DATABASE_URL=sqlite:///base.db
-env = { DATABASE_URL = "sqlite:///test.db" }   # overrides the file
+envfile = ".env"                    # e.g. DATABASE_URL=sqlite:///file.db
+env = { DATABASE_URL = "sqlite:///test.db" }   # overrides the file and the top level
 # environ['DATABASE_URL'] is now "sqlite:///test.db" for run too:
 run = "pytest --db {{ environ['DATABASE_URL'] }}"
 ```
@@ -347,8 +374,8 @@ run = "ruff check ."
   it is `''`.
 
 `environ`
-: The process environment (`os.environ`) as a dict, overlaid with the job's
-  `envfile` and `env` values (which are resolved before any other field; see
+: The process environment (`os.environ`) as a dict, overlaid with the top-level
+  and task `envfile`/`env` values (which are resolved before any other field; see
   {ref}`environment`), for reading variables the command will run with. It is a
   copy, so a `when` expression cannot mutate the real environment through it.
   Example: `{{ environ['HOME'] }}` renders to the caller's home directory, and

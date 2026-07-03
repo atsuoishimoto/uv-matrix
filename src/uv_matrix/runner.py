@@ -13,6 +13,7 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from .config import CONFIG_TABLE
 from .evaluate import build_context, eval_expr, render_string, render_template
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9.+_-]")
@@ -34,7 +35,8 @@ def _shell_command(run: str) -> list[str]:
 
 
 class TaskError(Exception):
-    """Raised when a job references an undefined or invalid task."""
+    """Raised when a job cannot be resolved: an undefined or invalid task, or
+    invalid environment settings (``env``/``envfile``) at either level."""
 
 
 @dataclass
@@ -104,15 +106,16 @@ def _env_key(
     return f"{label}-{digest}"
 
 
-def _load_envfiles(
-    task_config: dict[str, Any], task_name: str, ctx: dict[str, Any]
-) -> dict[str, str]:
-    """Load the task's ``envfile`` paths into a flat ``{name: value}`` mapping.
+def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
+    """Load ``envfile`` paths into a flat ``{name: value}`` mapping.
 
-    ``envfile`` is either a single path or a list of paths, each rendered as a
-    Jinja2 template (so a path may use ``matrix``/``vars``/``environ``). Files are
-    parsed in order with ``.env`` semantics; a later file overrides an earlier one
-    on a shared key, so ``env`` (applied on top by the caller) always wins last.
+    ``raw`` is the ``envfile`` value from ``owner`` — the top-level
+    ``[tool.uv-matrix]`` table or a task; ``owner`` labels error messages. It is
+    either a single path or a list of paths, each rendered as a Jinja2 template
+    (so a path may use ``matrix``/``vars``/``environ``). Files are parsed in
+    order with ``.env`` semantics; a later file overrides an earlier one on a
+    shared key, so the same level's ``env`` (applied on top by the caller)
+    always wins last.
 
     A path that does not name an existing file is an error rather than a silent
     skip — ``dotenv_values`` returns ``{}`` for a missing file, so the existence
@@ -122,7 +125,6 @@ def _load_envfiles(
     Relative paths resolve from the current working directory, which the CLI sets
     to the project root, so an ``envfile`` resolves the same as ``run``/``cwd``.
     """
-    raw = task_config.get("envfile")
     if raw is None:
         return {}
     if isinstance(raw, str):
@@ -130,16 +132,25 @@ def _load_envfiles(
     elif isinstance(raw, list):
         paths = raw
     else:
-        raise TaskError(f"task {task_name!r}: 'envfile' must be a string or an array")
+        raise TaskError(f"{owner}: 'envfile' must be a string or an array")
 
     result: dict[str, str] = {}
     for entry in paths:
         path = render_string(entry, ctx)
         if not Path(path).is_file():
-            raise TaskError(f"task {task_name!r}: envfile {path!r} not found")
+            raise TaskError(f"{owner}: envfile {path!r} not found")
         for key, value in dotenv_values(path).items():
             result[key] = value if value is not None else ""
     return result
+
+
+def _rendered_env(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
+    """Render an ``env`` table's values as templates (keys stay literal)."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise TaskError(f"{owner}: 'env' must be a table")
+    return {str(key): render_string(value, ctx) for key, value in raw.items()}
 
 
 def resolve_job(
@@ -164,18 +175,22 @@ def resolve_job(
 
     ctx = build_context(config, matrix_name, cell, task_name, task_config, posargs)
 
-    # Environment is settled first, before any other field is evaluated: load the
-    # `envfile`(s), then layer the rendered `env` on top (so `env` overrides a key
-    # from a file), then fold the result into the `environ` namespace. Every field
-    # below — `when` included — therefore reads the post-override values through
-    # `{{ environ['X'] }}`. Precedence low→high: os.environ < envfile < env.
-    envfile_vars = _load_envfiles(task_config, task_name, ctx)
-    ctx["environ"] = {**os.environ, **envfile_vars}  # so `env` can read envfile values
-    rendered_env = {
-        str(key): render_string(value, ctx) for key, value in task_config.get("env", {}).items()
-    }
-    env = {**envfile_vars, **rendered_env}
-    ctx["environ"] = {**os.environ, **env}
+    # Environment is settled first, before any other field is evaluated. Two
+    # levels apply: the top-level [tool.uv-matrix] `envfile`/`env` (shared by
+    # every job), then the task's own `envfile`/`env` layered on top, so a task
+    # overrides a same-named variable for its own jobs only. Within each level
+    # the file(s) load first and `env` overrides them. After every step the
+    # result is folded into the `environ` namespace, so each later step — and
+    # every field below, `when` included — reads the post-override values
+    # through `{{ environ['X'] }}`. Precedence low→high:
+    # os.environ < top-level envfile < top-level env < task envfile < task env.
+    env: dict[str, str] = {}
+    levels = ((config, f"[tool.{CONFIG_TABLE}]"), (task_config, f"task {task_name!r}"))
+    for table, owner in levels:
+        env.update(_load_envfiles(table.get("envfile"), owner, ctx))
+        ctx["environ"] = {**os.environ, **env}  # so `env` can read envfile values
+        env.update(_rendered_env(table.get("env"), owner, ctx))
+        ctx["environ"] = {**os.environ, **env}
 
     if "when" in task_config and not eval_expr(task_config["when"], ctx):
         return None
