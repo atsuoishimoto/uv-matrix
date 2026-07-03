@@ -67,6 +67,16 @@ def build_context(
     ``"linux"``, ``"darwin"``, ``"win32"``), so a ``when`` expression can gate a
     job by OS (``when = "platform == 'win32'"``).
 
+    Each ``[tool.uv-matrix.vars]`` string value is evaluated as a **Python
+    expression** with the same rules as ``when`` (:func:`eval_expr`): a
+    non-string value (number, boolean, array) is used as-is, and a literal
+    string must be quoted inside the expression (``reports = "'.reports'"``).
+    Values are evaluated in definition order, each one seeing the reserved
+    names below, the matrix cell's axes, and every var defined before it — so
+    a later var can build on an earlier one. Because vars are resolved when
+    the context is built, ``environ`` inside a var expression is the plain
+    process environment, before any ``envfile``/``env`` settings are applied.
+
     Each matrix axis and each ``vars`` key is also exposed as a **top-level
     variable** with ``-`` replaced by ``_``, so a hyphenated name is usable as a
     plain name in a template or expression (``python_version`` for the
@@ -78,21 +88,29 @@ def build_context(
     cannot shadow the builtin), and a matrix axis overrides a ``vars`` key (the
     cell is the more specific, per-job value).
     """
-    vars_dict = dict(config.get("vars", {}))
-    vars_alias = {key.replace("-", "_"): value for key, value in vars_dict.items()}
-    cell_alias = {key.replace("-", "_"): value for key, value in cell.items()}
-    return {
-        **vars_alias,
-        **cell_alias,
+    base = {
         "matrix": cell,
         "matrix_name": matrix_name,
-        "vars": vars_dict,
         "task": task_name,
         "task_config": task_config,
         "posargs": shlex.join(posargs or []),
         "environ": dict(os.environ),
         "platform": sys.platform,
     }
+    cell_alias = {key.replace("-", "_"): value for key, value in cell.items()}
+    vars_dict: dict[str, Any] = {}
+    vars_alias: dict[str, Any] = {}
+    for key, raw in config.get("vars", {}).items():
+        # The namespace mirrors the final context's precedence (reserved names
+        # and axes shadow var aliases) and grows as each var is defined.
+        namespace = {**vars_alias, **cell_alias, **base, "vars": vars_dict}
+        try:
+            value = eval_expr(raw, namespace)
+        except EvalError as exc:
+            raise EvalError(f"vars[{key!r}]: {exc}") from exc
+        vars_dict[key] = value
+        vars_alias[key.replace("-", "_")] = value
+    return {**vars_alias, **cell_alias, **base, "vars": vars_dict}
 
 
 def render_string(template: str, ctx: dict[str, Any]) -> str:
