@@ -100,7 +100,7 @@ def test_validate_axis_name_rejects_non_identifier_names():
 def test_validate_config_names_accepts_valid_config():
     config = {
         "matrix": {"test": {"python-version": ["3.13"], "tasks": ["t"]}},
-        "vars": {"reports": ".reports", "db-url": "sqlite://"},
+        "vars": {"reports": "'.reports'", "db-url": "'sqlite://'"},
     }
     validate_config_names(config)  # does not raise
 
@@ -192,8 +192,9 @@ def test_build_context_exposes_global_vars_and_matrix_name():
     config = {"vars": {"a": "1", "b": "2"}}
     task_config = {"vars": {"b": "override"}}
     ctx = build_context(config, "checks", {"python": "3.13"}, "lint", task_config)
-    # `vars` are global only; a task's own `vars` are ignored.
-    assert ctx["vars"] == {"a": "1", "b": "2"}
+    # `vars` are global only; a task's own `vars` are ignored. String values
+    # are Python expressions, so "1" and "2" evaluate to integers.
+    assert ctx["vars"] == {"a": 1, "b": 2}
     assert ctx["task"] == "lint"
     assert ctx["matrix_name"] == "checks"
     assert ctx["matrix"] == {"python": "3.13"}
@@ -211,13 +212,55 @@ def test_build_context_exposes_axis_alias_as_top_level_var():
 
 def test_build_context_exposes_vars_alias_as_top_level_var():
     # Each `vars` key is also a top-level name (hyphen -> underscore); `vars`
-    # itself is left as-is for dict lookup.
-    config = {"vars": {"reports": ".reports", "db-url": "sqlite://"}}
+    # itself keeps the original hyphenated keys for dict lookup.
+    config = {"vars": {"reports": "'.reports'", "db-url": "'sqlite://'"}}
     ctx = build_context(config, "m", {}, "t", {})
     assert ctx["reports"] == ".reports"
     assert ctx["db_url"] == "sqlite://"
-    assert ctx["vars"] == {"reports": ".reports", "db-url": "sqlite://"}  # unchanged
+    assert ctx["vars"] == {"reports": ".reports", "db-url": "sqlite://"}
     assert render_string("{{ reports }}/{{ db_url }}", ctx) == ".reports/sqlite://"
+
+
+def test_build_context_evaluates_vars_as_expressions():
+    # A string var is a Python expression (like `when`); it sees the matrix
+    # cell (dict and alias forms), `matrix_name`, `platform`, and `environ`.
+    config = {
+        "vars": {
+            "label": "matrix_name + '-' + matrix['python-version']",
+            "short": "python_version.replace('.', '')",
+            "on-ci": "environ.get('CI') is not None",
+        }
+    }
+    ctx = build_context(config, "checks", {"python-version": "3.13"}, "t", {})
+    assert ctx["label"] == "checks-3.13"
+    assert ctx["short"] == "313"
+    assert ctx["vars"]["on-ci"] in (True, False)
+
+
+def test_build_context_vars_see_earlier_vars():
+    # Vars evaluate in definition order; a later var can reference an earlier
+    # one by alias or through the `vars` dict, but not a later one.
+    config = {"vars": {"base-dir": "'.reports'", "junit": "base_dir + '/junit'"}}
+    ctx = build_context(config, "m", {}, "t", {})
+    assert ctx["junit"] == ".reports/junit"
+
+    forward = {"vars": {"junit": "base_dir + '/junit'", "base-dir": "'.reports'"}}
+    with pytest.raises(EvalError, match="junit"):
+        build_context(forward, "m", {}, "t", {})
+
+
+def test_build_context_non_string_vars_are_literal():
+    # Non-string values pass through unevaluated, matching `when`/`eval_expr`.
+    config = {"vars": {"count": 3, "flag": True, "names": ["a", "b"]}}
+    ctx = build_context(config, "m", {}, "t", {})
+    assert ctx["count"] == 3
+    assert ctx["flag"] is True
+    assert ctx["names"] == ["a", "b"]
+
+
+def test_build_context_invalid_var_expression_names_the_var():
+    with pytest.raises(EvalError, match=r"vars\['reports'\]"):
+        build_context({"vars": {"reports": ".reports"}}, "m", {}, "t", {})
 
 
 def test_build_context_reserved_names_and_matrix_axis_win_over_aliases():
@@ -225,7 +268,7 @@ def test_build_context_reserved_names_and_matrix_axis_win_over_aliases():
     # matrix axis takes precedence over a `vars` key of the same name.
     import sys
 
-    config = {"vars": {"platform": "from-vars", "shared": "from-vars"}}
+    config = {"vars": {"platform": "'from-vars'", "shared": "'from-vars'"}}
     ctx = build_context(config, "m", {"platform": "from-axis", "shared": "from-axis"}, "t", {})
     assert ctx["platform"] == sys.platform  # reserved builtin, not the axis
     assert ctx["shared"] == "from-axis"  # matrix axis beats vars

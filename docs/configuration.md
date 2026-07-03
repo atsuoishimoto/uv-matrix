@@ -52,7 +52,14 @@ Keys set directly under `[tool.uv-matrix]`:
   Overridden by `--max-jobs N` on the command line. See {ref}`parallel`.
 
 `vars`
-: Global literal variables, exposed to every task's templates as `{{ vars }}`.
+: Global variables, exposed to every task's templates and expressions (see
+  {ref}`variables`). Each **string value is evaluated as a Python expression**,
+  with the same rules as `when` — so quote a literal string
+  (`reports = "'.reports'"`), and non-string values (numbers, booleans, arrays)
+  are used as-is. Expressions see the reserved variables, the matrix cell's
+  axes, and every var defined earlier in the table, so a later var can build on
+  an earlier one. Vars are resolved before `envfile`/`env` are applied, so
+  `environ` inside a var expression is the plain process environment.
 
 `envfile`
 : Path(s) to `.env`-style files whose variables are added to **every** job's
@@ -327,7 +334,7 @@ this config:
 
 ```toml
 [tool.uv-matrix.vars]
-reports = ".reports"
+reports = "'.reports'"
 
 [tool.uv-matrix.matrix.checks]
 python-version = ["3.13"]
@@ -353,10 +360,12 @@ run = "ruff check ."
   Example value `'checks'`, so `{{ matrix_name }}` renders to `checks`.
 
 `vars`
-: The global `[tool.uv-matrix.vars]` table, shared by every job.
-  Example value `{'reports': '.reports'}`, so
-  `{{ vars['reports'] }}` renders to `.reports`. Each key is also a top-level name
-  (`-` → `_`), so `{{ reports }}` renders to `.reports` as well.
+: The global `[tool.uv-matrix.vars]` table, shared by every job. String values
+  are Python expressions (evaluated like `when`, in definition order); other
+  values are used literally.
+  Example value `{'reports': '.reports'}` (the expression `"'.reports'"`
+  evaluated), so `{{ vars['reports'] }}` renders to `.reports`. Each key is also
+  a top-level name (`-` → `_`), so `{{ reports }}` renders to `.reports` as well.
 
 `task`
 : The name of the task being run.
