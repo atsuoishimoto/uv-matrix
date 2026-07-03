@@ -481,6 +481,76 @@ def test_resolve_job_envfile_missing_raises(tmp_path, monkeypatch):
         resolve_job({}, "m", {}, "test", tasks)
 
 
+def test_resolve_job_top_level_env_applies_to_every_job():
+    config = {"env": {"FOO": "global"}}
+    tasks = {"test": {"run": "pytest"}, "lint": {"run": "ruff check ."}}
+    for task_name in ("test", "lint"):
+        job = resolve_job(config, "m", {}, task_name, tasks)
+        assert job.env["FOO"] == "global"
+
+
+def test_resolve_job_task_env_overrides_top_level_env():
+    config = {"env": {"FOO": "global", "BAR": "keep"}}
+    tasks = {"test": {"run": "pytest", "env": {"FOO": "task"}}}
+    job = resolve_job(config, "m", {}, "test", tasks)
+    assert job.env["FOO"] == "task"  # the task's own value wins for its jobs
+    assert job.env["BAR"] == "keep"  # untouched top-level key survives
+
+
+def test_resolve_job_top_level_envfile_applies(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("FOO=from_file\n")
+    config = {"envfile": ".env"}
+    tasks = {"test": {"run": "pytest"}}
+    job = resolve_job(config, "m", {}, "test", tasks)
+    assert job.env["FOO"] == "from_file"
+
+
+def test_resolve_job_top_level_env_overrides_top_level_envfile(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("FOO=from_file\n")
+    config = {"envfile": ".env", "env": {"FOO": "from_env"}}
+    tasks = {"test": {"run": "pytest"}}
+    job = resolve_job(config, "m", {}, "test", tasks)
+    assert job.env["FOO"] == "from_env"  # within a level, `env` wins over `envfile`
+
+
+def test_resolve_job_task_envfile_overrides_top_level_env(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env.task").write_text("FOO=task_file\n")
+    config = {"env": {"FOO": "global"}}
+    tasks = {"test": {"run": "pytest", "envfile": ".env.task"}}
+    job = resolve_job(config, "m", {}, "test", tasks)
+    assert job.env["FOO"] == "task_file"  # the whole task level sits above the top level
+
+
+def test_resolve_job_task_env_can_reference_top_level_env():
+    config = {"env": {"BASE": "root"}}
+    tasks = {"test": {"run": "pytest", "env": {"DERIVED": "{{ environ['BASE'] }}/sub"}}}
+    job = resolve_job(config, "m", {}, "test", tasks)
+    assert job.env["DERIVED"] == "root/sub"
+
+
+def test_resolve_job_top_level_env_visible_in_run():
+    config = {"env": {"GREETING": "hi"}}
+    tasks = {"test": {"python-version": "3.12", "run": "echo {{ environ['GREETING'] }}"}}
+    job = resolve_job(config, "m", {}, "test", tasks)
+    assert job.command[-3:] == _shell_command("echo hi")
+
+
+def test_resolve_job_top_level_envfile_invalid_type_raises():
+    config = {"envfile": 42}
+    tasks = {"test": {"run": "pytest"}}
+    with pytest.raises(TaskError, match=r"\[tool\.uv-matrix\].*'envfile'"):
+        resolve_job(config, "m", {}, "test", tasks)
+
+
+def test_resolve_job_env_must_be_table():
+    tasks = {"test": {"run": "pytest", "env": "FOO=1"}}
+    with pytest.raises(TaskError, match="'env' must be a table"):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
 def test_resolve_job_expands_posargs_into_run():
     tasks = {"test": {"python-version": "3.12", "run": "pytest {{ posargs }}"}}
     job = resolve_job({}, "m", {}, "test", tasks, ["-k", "slow"])
