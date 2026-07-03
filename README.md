@@ -17,30 +17,6 @@ Many Python projects need to run checks like this:
 - run lint, docs, and test tasks from one project configuration
 - pass the same matrix setup to local development and CI
 
-`uv-matrix` keeps that configuration explicit and close to the rest of the project:
-
-```toml
-[tool.uv-matrix.matrix.test]
-python-version = ["3.12", "3.13"]
-tasks = ["test"]
-
-[tool.uv-matrix.tasks.test]
-run = "pytest"
-```
-
-Running the matrix executes each job with `uv run`.
-
-```bash
-uv-matrix run
-```
-
-## How it relates to tox
-
-tox is a mature test environment manager.
-
-`uv-matrix` is intentionally smaller. It delegates interpreter discovery, environment creation, and dependency resolution to uv, then focuses on one job: expanding matrix definitions into commands.
-
-Instead of encoding combinations into environment names, `uv-matrix` keeps matrix axes explicit in `pyproject.toml`.
 
 ## Installation
 
@@ -64,31 +40,31 @@ uvx uv-matrix --help
 Add a matrix and a task to `pyproject.toml`:
 
 ```toml
-[tool.uv-matrix.matrix.test]
-python-version = ["3.12", "3.13"] # 
-tasks = ["test"]
+[tool.uv-matrix.matrix.test]        # a matrix named "test"
+python-version = ["3.12", "3.13"]   # run the job on Python 3.12 and 3.13
+tasks = ["run_test"]                # run the "run_test" task in every cell
 
-[tool.uv-matrix.tasks.test]
-run = "pytest"
+[tool.uv-matrix.tasks.run_test]     # a task named "run_test"
+run = "pytest"                      # command run through `uv run`
 ```
 
 Run all jobs:
 
 ```bash
-uv-matrix run
+uv run uv-matrix run
 ```
 
 List the jobs without running them:
 
 ```bash
-uv-matrix list
+uv run uv-matrix list
 ```
 
 The matrix above expands to:
 
 ```text
-test:test  python-version=3.12
-test:test  python-version=3.13
+test:run_test python-version=3.12
+test:run_test python-version=3.13
 ```
 
 Each job is executed through `uv run`. For example, the first job runs roughly like this:
@@ -99,16 +75,16 @@ uv run --python 3.12 sh -c "pytest"
 
 ### Matrices
 
-Inside a matrix, every key except `tasks` and `exclude` defines an axis.
+In this matrix, `python-version` and `webui` are axes.
 
 ```toml
 [tool.uv-matrix.matrix.test]
-python-version = ["3.12", "3.13"]
-webui = ["", "django", "flask"]
-tasks = ["test"]
+python-version = ["3.12", "3.13"]   # reserved axis -> uv run --python
+webui = ["django", "flask"]         # a custom axis (any name)
+tasks = ["test"]                    # 2 x 2 = 4 jobs
 ```
 
-Axes are combined as a cartesian product. In the example above, `python-version` has 2 values and `webui` has 3 values, so the `test` matrix creates 6 jobs.
+Axes are combined as a cartesian product. In the example above, `python-version` has 2 values and `webui` has 2 values, so the `test` matrix creates 4 jobs.
 
 `python-version` is a reserved axis. It is inherited by tasks that do not set their own Python version and is passed to `uv run --python`.
 
@@ -117,10 +93,10 @@ Axes are combined as a cartesian product. In the example above, `python-version`
 Tasks are reusable command definitions.
 
 ```toml
-[tool.uv-matrix.tasks.test]
-run = "pytest {{ posargs }}"
-extras = ["{{ webui }}"]
-when = "platform != 'win32'"
+[tool.uv-matrix.tasks.run_test]
+run = "pytest {{ posargs }}"        # {{ posargs }}: args after `--`
+extras = ["{{ webui }}"]            # include the current webui extra. ignored if webui is blank.
+when = "platform != 'win32'"        # skip this task on Windows
 ```
 
 Common task fields include:
@@ -131,43 +107,45 @@ Common task fields include:
 * `cwd`: working directory for the command
 * `when`: condition that decides whether the job should run
 
-Task fields can use Jinja2 templates such as `{{ webui }}` and `{{ posargs }}`.
+Task fields can use [Jinja2](https://jinja.palletsprojects.com/en/stable/) templates such as `{{ webui }}` and `{{ posargs }}`.
 
 `{{ posargs }}` expands to arguments passed after `--`:
 
 ```bash
-uv-matrix run --task test -- -k slow
+uv-matrix run --task run_test -- -k slow
 ```
 
 ### Conditions
 
-`when` is evaluated with Python's `eval` against the context provided by `uv-matrix`.
-
-Treat `pyproject.toml` configuration as trusted project code.
+`when` specifies a Python expression. If it evaluates to `False`, the task is skipped.
 
 Templates and `when` expressions are evaluated only when running jobs. Commands that only enumerate jobs, such as `list`, expand the matrix without rendering templates or evaluating `when`.
-
-See the documentation for the full template and condition reference:
-
-* [https://uv-matrix.readthedocs.io/en/latest/configuration.html#templates](https://uv-matrix.readthedocs.io/en/latest/configuration.html#templates)
-* [https://uv-matrix.readthedocs.io/en/latest/configuration.html#variables](https://uv-matrix.readthedocs.io/en/latest/configuration.html#variables)
 
 ## Usage
 
 ```bash
-uv-matrix run                          # run every job from every matrix
-uv-matrix run --matrix test            # run one matrix
-uv-matrix run --filter webui=django    # select jobs by axis value
-uv-matrix run --task lint              # run one task wherever it appears
-uv-matrix run --max-jobs 4             # run up to 4 jobs at once
-uv-matrix run --dry-run                # print commands without running them
-uv-matrix run --task test -- -k slow   # pass extra args as {{ posargs }}
-uv-matrix list                         # list selectable jobs
+uv-matrix run                            # run every job from every matrix
+uv-matrix run --matrix test              # run one matrix
+uv-matrix run --filter webui=django      # select jobs by axis value
+uv-matrix run --task lint                # run one task wherever it appears
+uv-matrix run --max-jobs 4               # run up to 4 jobs at once
+uv-matrix run --dry-run                  # print commands without running them
+uv-matrix run --task run_test -- -k slow # pass extra args as {{ posargs }}
+uv-matrix list                           # list selectable jobs
 ```
 
 By default, `uv-matrix` finds `pyproject.toml` by walking up from the current directory, then runs from the project root.
 
 Use `--config PATH` to point to a specific config file, or `--project DIR` to set the project directory.
+
+## How it relates to tox
+
+tox is a mature test environment manager.
+
+`uv-matrix` is intentionally smaller. It delegates interpreter discovery, environment creation, and dependency resolution to uv, then focuses on one job: expanding matrix definitions into commands.
+
+Instead of encoding combinations into environment names, `uv-matrix` keeps matrix axes explicit in `pyproject.toml`.
+
 
 ## License
 
