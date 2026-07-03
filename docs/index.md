@@ -42,3 +42,10 @@ usage
 configuration
 changelog
 ```
+
+```{toctree}
+:hidden:
+:caption: Links
+
+GitHub <https://github.com/atsuoishimoto/uv-matrix>
+```
