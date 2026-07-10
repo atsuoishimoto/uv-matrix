@@ -1,6 +1,7 @@
 """Tests for the uv-matrix MVP: matrix expansion, evaluation, job resolution."""
 
 import os
+import sys
 
 import pytest
 
@@ -385,9 +386,14 @@ def test_build_context_posargs_default_empty():
     assert ctx["posargs"] == ""
 
 
-def test_build_context_posargs_shell_quoted():
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_build_context_posargs_shell_quoted(platform, mocker):
+    mocker.patch("sys.platform", platform)
     ctx = build_context({}, "m", {}, "t", {}, ["-k", "slow and fast", "-x"])
-    assert ctx["posargs"] == "-k 'slow and fast' -x"
+    if sys.platform == "win32":
+        assert ctx["posargs"] == '-k "slow and fast" -x'
+    else:
+        assert ctx["posargs"] == "-k 'slow and fast' -x"
 
 
 def test_build_context_exposes_environ_copy(monkeypatch):
