@@ -1208,22 +1208,27 @@ def test_banner_default_shows_only_label(tmp_path, monkeypatch, capsys):
 
 
 def test_banner_verbose_adds_command_line(tmp_path, monkeypatch, capsys):
+    import shlex
     # -v adds the command line (as written, without uv's own --quiet) but not env.
     out, _ = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-v"])
-    assert "  + uv run --python 3.11 sh -c x" in out
+    expected_cmd = " ".join(shlex.quote(p) for p in ["uv", "run", "--python", "3.11"] + _shell_command("x"))
+    assert f"  + {expected_cmd}" in out
     assert "--quiet" not in out
     assert "env:" not in out
 
 
 def test_banner_very_verbose_adds_env_line(tmp_path, monkeypatch, capsys):
+    import shlex
     # -vv adds the env line, and uv keeps its default (chatty) output.
     out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-vv"])
-    assert "  + uv run --python 3.11 sh -c x" in out
+    expected_cmd = " ".join(shlex.quote(p) for p in ["uv", "run", "--python", "3.11"] + _shell_command("x"))
+    assert f"  + {expected_cmd}" in out
     assert "  env: .uv-matrix/py3.11-" in out
     assert "--quiet" not in command
 
 
 def test_dry_run_shows_command_at_default_verbosity(tmp_path, monkeypatch, capsys):
+    import shlex
     from uv_matrix.cli import main
 
     _write_project(tmp_path)
@@ -1232,7 +1237,8 @@ def test_dry_run_shows_command_at_default_verbosity(tmp_path, monkeypatch, capsy
     # it is the command as written, without uv's --quiet.
     assert main(["run", "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "  + uv run --python 3.11 sh -c x" in out
+    expected_cmd = " ".join(shlex.quote(p) for p in ["uv", "run", "--python", "3.11"] + _shell_command("x"))
+    assert f"  + {expected_cmd}" in out
     assert "env:" not in out
 
 
@@ -1498,3 +1504,82 @@ def test_iter_plan_exclude_invalid_structure():
         ConfigError, match="'exclude' item key 'python-version' is not a valid axis"
     ):
         list(iter_plan(config_invalid_key))
+
+
+def test_render_string_non_string_template_raises():
+    with pytest.raises(EvalError, match="expected a string template, got int"):
+        render_string(123, {"matrix": {}})
+
+
+def test_eval_expr_invalid_python_syntax_raises():
+    with pytest.raises(EvalError, match="failed to evaluate expression"):
+        eval_expr("1 + ", {"matrix": {}})
+
+
+def test_iter_plan_non_string_tasks_raises():
+    config = {
+        "matrix": {
+            "test": {
+                "python": ["3.13"],
+                "tasks": [123]
+            }
+        }
+    }
+    with pytest.raises(ConfigError, match="tasks' entries must be strings"):
+        list(iter_plan(config))
+
+
+def test_validate_name_rejects_keywords():
+    for kw in ("class", "def", "import", "while", "return"):
+        with pytest.raises(ConfigError, match="names must follow Python's variable rules"):
+            validate_axis_name(kw)
+
+
+def test_find_pyproject_missing_raises(tmp_path, monkeypatch):
+    import pathlib
+    monkeypatch.setattr(pathlib.Path, "is_file", lambda self: False)
+    with pytest.raises(ConfigError, match="no pyproject.toml found"):
+        find_pyproject(tmp_path)
+
+
+def test_load_config_invalid_toml_raises(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("invalid = { [ } toml", encoding="utf-8")
+    with pytest.raises(ConfigError, match="invalid TOML"):
+        load_config(pyproject)
+
+
+def test_load_config_missing_tool_table_raises(tmp_path):
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("[project]\nname = 'test'", encoding="utf-8")
+    with pytest.raises(ConfigError, match="missing \\[tool\\.uv-matrix\\] table"):
+        load_config(pyproject)
+
+
+def test_resolve_job_task_envfile_invalid_type_raises():
+    tasks = {"test": {"run": "pytest", "envfile": 123}}
+    with pytest.raises(TaskError, match="envfile' must be a string or an array"):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
+def test_resolve_job_top_level_env_invalid_type_raises():
+    config = {"env": "NOT_A_TABLE"}
+    tasks = {"test": {"run": "pytest"}}
+    with pytest.raises(TaskError, match="'env' must be a table"):
+        resolve_job(config, "m", {}, "test", tasks)
+
+
+def test_resolve_job_top_level_envfile_missing_raises(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    config = {"envfile": ".env.absent"}
+    tasks = {"test": {"run": "pytest"}}
+    with pytest.raises(TaskError, match="envfile.*not found"):
+        resolve_job(config, "m", {}, "test", tasks)
+
+
+def test_resolve_job_invalid_str_list_fields_raises():
+    for field in ("groups", "extras", "uv-args"):
+        tasks = {"test": {"run": "pytest", field: "not-an-array"}}
+        with pytest.raises(TaskError, match=f"'{field}' must be an array"):
+            resolve_job({}, "m", {}, "test", tasks)
+
