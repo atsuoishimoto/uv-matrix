@@ -280,6 +280,7 @@ def _run_parallel(
     """
     env_locks: dict[str, threading.Lock] = {}
     locks_guard = threading.Lock()
+    synced_envs: set[str] = set()
 
     def env_lock(key: str) -> threading.Lock:
         with locks_guard:
@@ -287,15 +288,33 @@ def _run_parallel(
 
     def run_one(job: Job) -> subprocess.CompletedProcess[str]:
         env = _job_env(job, root)
-        with env_lock(job.env_key):
-            return subprocess.run(
-                _job_command(job, verbosity),
-                env=env,
-                cwd=job.cwd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-            )
+        if job.env_key not in synced_envs:
+            with env_lock(job.env_key):
+                if job.env_key not in synced_envs:
+                    sync_command = [*job.command[:-3], "python", "-c", ""]
+                    res = subprocess.run(
+                        sync_command,
+                        env=env,
+                        cwd=job.cwd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                    )
+                    if res.returncode != 0:
+                        return res
+                    synced_envs.add(job.env_key)
+
+        exec_command = _job_command(job, verbosity)
+        exec_command.insert(2, "--no-sync")
+
+        return subprocess.run(
+            exec_command,
+            env=env,
+            cwd=job.cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
 
     failed: list[tuple[Job, int]] = []
     stopping = False

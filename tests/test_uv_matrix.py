@@ -386,8 +386,12 @@ def test_build_context_posargs_default_empty():
 
 
 def test_build_context_posargs_shell_quoted():
+    import sys
     ctx = build_context({}, "m", {}, "t", {}, ["-k", "slow and fast", "-x"])
-    assert ctx["posargs"] == "-k 'slow and fast' -x"
+    if sys.platform == "win32":
+        assert ctx["posargs"] == '-k "slow and fast" -x'
+    else:
+        assert ctx["posargs"] == "-k 'slow and fast' -x"
 
 
 def test_build_context_exposes_environ_copy(monkeypatch):
@@ -1321,7 +1325,8 @@ def test_run_parallel_runs_all_and_captures(monkeypatch, capsys):
     seen = []
 
     def fake_run(cmd, env=None, cwd=None, **kwargs):
-        seen.append(kwargs)
+        if "python" not in cmd:
+            seen.append(kwargs)
         return subprocess.CompletedProcess(cmd, 0, stdout="hello\n")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
@@ -1582,4 +1587,28 @@ def test_resolve_job_invalid_str_list_fields_raises():
         tasks = {"test": {"run": "pytest", field: "not-an-array"}}
         with pytest.raises(TaskError, match=f"'{field}' must be an array"):
             resolve_job({}, "m", {}, "test", tasks)
+
+
+
+
+
+def test_run_parallel_injects_no_sync(tmp_path, monkeypatch, capsys):
+    import subprocess
+    from uv_matrix import cli
+    from uv_matrix.cli import main
+
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    run_commands = []
+    def fake_run(cmd, **kwargs):
+        run_commands.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="success\n")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert main(["run", "--max-jobs", "2"]) == 0
+    syncs = [cmd for cmd in run_commands if "python" in cmd and "-c" in cmd]
+    runs = [cmd for cmd in run_commands if "--no-sync" in cmd]
+    assert len(syncs) > 0
+    assert len(runs) > 0
 
