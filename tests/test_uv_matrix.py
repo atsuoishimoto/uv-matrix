@@ -984,6 +984,17 @@ def test_resolve_job_continue_on_error_global_default_and_override():
     assert resolve_job({}, "m", {}, "t", {"t": base}).continue_on_error is False
 
 
+def _spawned_argv(command):
+    """Normalize what the CLI handed to ``subprocess.run`` back to an argv list.
+
+    On Windows ``spawn_args`` passes a single command-line string (so the
+    ``run`` string reaches ``cmd.exe`` without an extra escaping layer). The
+    stubs here only inspect simple space-free tokens, so a plain split is
+    enough to recover them.
+    """
+    return command if isinstance(command, list) else command.split()
+
+
 def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error="False"):
     """Run `uv-matrix run` over a one-axis matrix with stubbed subprocess results.
 
@@ -1004,7 +1015,8 @@ def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error
 
     def fake_run(command, **kwargs):
         # `python-version` flows through to `uv run --python <ver>`.
-        version = command[command.index("--python") + 1]
+        argv = _spawned_argv(command)
+        version = argv[argv.index("--python") + 1]
         return subprocess.CompletedProcess(command, exit_codes[version])
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -1200,7 +1212,21 @@ def _banner_run(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setattr(subprocess, "run", fake_run)
     rc = main(argv)
     assert rc == 0
-    return capsys.readouterr().out, seen[0]
+    return capsys.readouterr().out, _spawned_argv(seen[0])
+
+
+def _banner_command_line():
+    """The banner's `  + <command>` line for `_write_project`'s single task.
+
+    The banner prints ``job.command_str`` — the shlex-quoted command — whose
+    shell tail is platform-dependent (``sh -c`` on POSIX, ``%COMSPEC% /c`` on
+    Windows), so the expectation is built from ``_shell_command`` rather than
+    hard-coded.
+    """
+    import shlex
+
+    shell = " ".join(shlex.quote(part) for part in _shell_command("x"))
+    return f"  + uv run --python 3.11 {shell}"
 
 
 def test_banner_default_shows_only_label(tmp_path, monkeypatch, capsys):
@@ -1216,7 +1242,7 @@ def test_banner_default_shows_only_label(tmp_path, monkeypatch, capsys):
 def test_banner_verbose_adds_command_line(tmp_path, monkeypatch, capsys):
     # -v adds the command line (as written, without uv's own --quiet) but not env.
     out, _ = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-v"])
-    assert "  + uv run --python 3.11 sh -c x" in out
+    assert _banner_command_line() in out
     assert "--quiet" not in out
     assert "env:" not in out
 
@@ -1224,7 +1250,7 @@ def test_banner_verbose_adds_command_line(tmp_path, monkeypatch, capsys):
 def test_banner_very_verbose_adds_env_line(tmp_path, monkeypatch, capsys):
     # -vv adds the env line, and uv keeps its default (chatty) output.
     out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-vv"])
-    assert "  + uv run --python 3.11 sh -c x" in out
+    assert _banner_command_line() in out
     assert "  env: .uv-matrix/py3.11-" in out
     assert "--quiet" not in command
 
@@ -1238,7 +1264,7 @@ def test_dry_run_shows_command_at_default_verbosity(tmp_path, monkeypatch, capsy
     # it is the command as written, without uv's --quiet.
     assert main(["run", "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "  + uv run --python 3.11 sh -c x" in out
+    assert _banner_command_line() in out
     assert "env:" not in out
 
 
