@@ -606,18 +606,6 @@ def test_resolve_job_posargs_default_renders_empty():
     assert job.command[-3:] == _shell_command("pytest ")
 
 
-def test_env_key_stable_and_distinct():
-    base = {"python-version": "3.12", "groups": ["test"], "run": "pytest"}
-    a = resolve_job({}, "m", {}, "t", {"t": base})
-    b = resolve_job({}, "other", {}, "t", {"t": base})  # same env inputs -> same key
-    c = resolve_job({}, "m", {}, "t", {"t": {**base, "groups": ["lint"]}})  # different groups
-    d = resolve_job({}, "m", {}, "t", {"t": {**base, "python-version": "3.13"}})
-    assert a.env_key == b.env_key
-    assert a.env_key != c.env_key
-    assert a.env_key != d.env_key
-    assert a.env_key.startswith("py3.12-")
-
-
 def test_parse_filters_groups_by_key():
     config = {
         "matrix": {
@@ -1219,7 +1207,7 @@ def test_banner_very_verbose_adds_env_line(tmp_path, monkeypatch, capsys):
     # -vv adds the env line, and uv keeps its default (chatty) output.
     out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-vv"])
     assert "  + uv run --python 3.11 sh -c x" in out
-    assert "  env: .uv-matrix/py3.11-" in out
+    assert "  env: .uv-matrix/slot-0" in out
     assert "--quiet" not in command
 
 
@@ -1329,14 +1317,11 @@ def test_run_parallel_runs_all_and_captures(monkeypatch, capsys):
     assert capsys.readouterr().out.count("hello") == 3
 
 
-def test_env_dir_name_slots():
+def test_slot_dir_names():
     from uv_matrix import cli
 
-    # Slot 0 keeps the bare key (shared with sequential runs and existing
-    # directories); higher slots get a suffix.
-    assert cli._env_dir_name("py3.12-abcd1234", 0) == "py3.12-abcd1234"
-    assert cli._env_dir_name("py3.12-abcd1234", 1) == "py3.12-abcd1234-1"
-    assert cli._env_dir_name("py3.12-abcd1234", 3) == "py3.12-abcd1234-3"
+    assert cli._slot_dir(0) == "slot-0"
+    assert cli._slot_dir(3) == "slot-3"
 
 
 def test_job_env_uses_slot_directory():
@@ -1346,17 +1331,18 @@ def test_job_env_uses_slot_directory():
 
     job = _simple_job()
     root = Path("/proj")
+    # Sequential runs default to slot 0.
     assert cli._job_env(job, root)["UV_PROJECT_ENVIRONMENT"] == str(
-        root / cli.ENV_DIR / job.env_key
+        root / cli.ENV_DIR / "slot-0"
     )
     assert cli._job_env(job, root, slot=2)["UV_PROJECT_ENVIRONMENT"] == str(
-        root / cli.ENV_DIR / f"{job.env_key}-2"
+        root / cli.ENV_DIR / "slot-2"
     )
 
 
-def test_run_parallel_same_env_key_runs_concurrently_in_distinct_dirs(monkeypatch):
-    # Jobs sharing an env_key are no longer serialized: each concurrent job
-    # borrows its own slot, so they overlap in time and never share a directory.
+def test_run_parallel_jobs_run_concurrently_in_distinct_dirs(monkeypatch):
+    # Concurrent jobs each borrow their own slot, so they overlap in time and
+    # never share an environment directory — no serialization, no locking.
     import subprocess
     import threading
     from pathlib import Path
@@ -1369,13 +1355,12 @@ def test_run_parallel_same_env_key_runs_concurrently_in_distinct_dirs(monkeypatc
     def fake_run(cmd, env=None, cwd=None, **kwargs):
         env_dirs.append(env["UV_PROJECT_ENVIRONMENT"])
         # Blocks until both jobs are inside subprocess.run at once — this would
-        # deadlock (and time out) under the old per-env_key lock.
+        # deadlock (and time out) if identical jobs were serialized.
         both_running.wait()
         return subprocess.CompletedProcess(cmd, 0, stdout="")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     jobs = [_simple_job(), _simple_job()]
-    assert jobs[0].env_key == jobs[1].env_key
     failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
     assert failed == []
     assert len(set(env_dirs)) == 2
@@ -1399,8 +1384,7 @@ def test_run_parallel_slots_are_bounded_and_reused(monkeypatch):
     jobs = [_simple_job() for _ in range(6)]
     failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
     assert failed == []
-    key = jobs[0].env_key
-    expected = {str(Path(".") / cli.ENV_DIR / name) for name in (key, f"{key}-1")}
+    expected = {str(Path(".") / cli.ENV_DIR / name) for name in ("slot-0", "slot-1")}
     assert env_dirs <= expected
 
 

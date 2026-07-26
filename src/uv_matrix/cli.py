@@ -127,22 +127,22 @@ def _selected_for_run(
         yield matrix_name, cell, task_name
 
 
-def _env_dir_name(env_key: str, slot: int) -> str:
-    """Directory name for an environment key on a given parallel slot.
+def _slot_dir(slot: int) -> str:
+    """Directory name for the environment of a parallel slot.
 
-    Slot 0 keeps the bare ``env_key`` so sequential runs and the first parallel
-    slot share one environment (and existing ``.uv-matrix/<key>`` directories
-    stay valid); higher slots get a ``-<slot>`` suffix. Giving each concurrent
-    slot its own directory is what makes locking unnecessary: two jobs can only
-    sync the same directory when they run one after the other.
+    There is exactly one environment directory per slot (sequential runs use
+    slot 0), so at most ``max-jobs`` directories ever exist. Giving each
+    concurrent slot its own directory is what makes locking unnecessary: two
+    jobs can only sync the same directory when they run one after the other,
+    and uv's implicit sync reconciles it to each job's requested contents.
     """
-    return env_key if slot == 0 else f"{env_key}-{slot}"
+    return f"slot-{slot}"
 
 
 def _job_env(job: Job, root: Path, slot: int = 0) -> dict[str, str]:
     """Subprocess environment, with per-job isolation layered under task env."""
     env = {**os.environ}
-    env["UV_PROJECT_ENVIRONMENT"] = str(root / ENV_DIR / _env_dir_name(job.env_key, slot))
+    env["UV_PROJECT_ENVIRONMENT"] = str(root / ENV_DIR / _slot_dir(slot))
     env.update(job.env)  # an explicit task `env` always wins
     return env
 
@@ -221,7 +221,7 @@ def _print_job_banner(
     if show_command or verbosity >= 1:
         print(style("dim", f"  + {job.command_str}"))
     if verbosity >= 2:
-        print(style("dim", f"  env: {ENV_DIR}/{_env_dir_name(job.env_key, slot)}"))
+        print(style("dim", f"  env: {ENV_DIR}/{_slot_dir(slot)}"))
 
 
 def _emit_output(output: str | None) -> None:
@@ -284,10 +284,10 @@ def _run_parallel(
     Output is captured per job (stderr folded into stdout) and printed as a
     single block after the job finishes, so concurrent jobs never interleave and
     each block is identifiable by its banner. Each of the ``parallel`` slots uses
-    its own environment directory (``<env_key>`` for slot 0, ``<env_key>-<slot>``
-    above), so two concurrent jobs never sync the same directory and jobs sharing
-    an environment key still run fully in parallel — no locking needed. uv's
-    hardlink-based cache keeps the duplicate environments cheap.
+    its own environment directory (``slot-<n>``), so two concurrent jobs never
+    sync the same directory and every job runs fully in parallel — no locking
+    needed. uv's hardlink-based cache keeps re-syncing a slot to a different
+    environment cheap.
 
     A failing job whose ``continue-on-error`` is false cancels jobs that have not
     started yet; jobs already running are allowed to finish and their output is
