@@ -107,6 +107,8 @@ Common task fields include:
 * `cwd`: working directory for the command
 * `when`: condition that decides whether the job should run
 
+The full set of task fields is `run`, `groups`, `extras`, `uv-args`, `env`, `envfile`, `cwd`, `when`, `python-version`, and `continue-on-error`. An unknown key in a task table (or at the top level of `[tool.uv-matrix]`) is an error, so a typo such as `group` for `groups` fails immediately instead of silently running the job without the intended settings.
+
 Task fields can use [Jinja2](https://jinja.palletsprojects.com/en/stable/) templates such as `{{ webui }}` and `{{ posargs }}`.
 
 `{{ posargs }}` expands to arguments passed after `--`:
@@ -132,6 +134,7 @@ uv-matrix run --max-jobs 4               # run up to 4 jobs at once
 uv-matrix run --dry-run                  # print commands without running them
 uv-matrix run --task run_test -- -k slow # pass extra args as {{ posargs }}
 uv-matrix list                           # list selectable jobs
+uv-matrix list --matrix test             # list only one matrix's jobs
 ```
 
 By default, `uv-matrix` finds `pyproject.toml` by walking up from the current directory, then runs from the project root.

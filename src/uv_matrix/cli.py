@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -82,18 +83,6 @@ def _cell_matches(cell: dict[str, Any], filters: dict[str, set[str]]) -> bool:
 
 
 def _selected(
-    config: dict[str, Any], task_filter: str | None, filters: dict[str, set[str]]
-) -> Iterator[tuple[str, dict[str, Any], str]]:
-    """Yield ``(matrix_name, cell, task_name)`` passing the task and cell filters."""
-    for matrix_name, cell, task_name in iter_plan(config):
-        if task_filter is not None and task_name != task_filter:
-            continue
-        if not _cell_matches(cell, filters):
-            continue
-        yield matrix_name, cell, task_name
-
-
-def _selected_for_run(
     config: dict[str, Any],
     matrix_filter: str | None,
     task_filter: str | None,
@@ -104,7 +93,8 @@ def _selected_for_run(
     ``--matrix`` and ``--task`` are matched by exact name; ``--filter`` matches
     against the cell's axis values. An unknown matrix or task name is an error
     (rather than a silent empty selection) so a typo is caught instead of quietly
-    running nothing.
+    selecting nothing. Shared by ``run`` and ``list`` so both validate the same
+    way (issue #21).
     """
     plan = list(iter_plan(config))
     if matrix_filter is not None:
@@ -127,10 +117,22 @@ def _selected_for_run(
         yield matrix_name, cell, task_name
 
 
-def _job_env(job: Job, root: Path) -> dict[str, str]:
+def _slot_dir(slot: int) -> str:
+    """Directory name for the environment of a parallel slot.
+
+    There is exactly one environment directory per slot (sequential runs use
+    slot 0), so at most ``max-jobs`` directories ever exist. Giving each
+    concurrent slot its own directory is what makes locking unnecessary: two
+    jobs can only sync the same directory when they run one after the other,
+    and uv's implicit sync reconciles it to each job's requested contents.
+    """
+    return f"slot-{slot}"
+
+
+def _job_env(job: Job, root: Path, slot: int = 0) -> dict[str, str]:
     """Subprocess environment, with per-job isolation layered under task env."""
     env = {**os.environ}
-    env["UV_PROJECT_ENVIRONMENT"] = str(root / ENV_DIR / job.env_key)
+    env["UV_PROJECT_ENVIRONMENT"] = str(root / ENV_DIR / _slot_dir(slot))
     env.update(job.env)  # an explicit task `env` always wins
     return env
 
@@ -143,7 +145,7 @@ def _cmd_list(config: dict[str, Any], args: argparse.Namespace, root: Path) -> i
     """
     style = _Style(_use_color(args))
     filters = parse_filters(config, args.filter or [])
-    for matrix_name, cell, task_name in _selected(config, args.task, filters):
+    for matrix_name, cell, task_name in _selected(config, args.matrix, args.task, filters):
         print(style("cyan", _label(matrix_name, cell, task_name)))
     return 0
 
@@ -188,7 +190,7 @@ def _job_command(job: Job, verbosity: int) -> list[str]:
 
 
 def _print_job_banner(
-    job: Job, style: _Style, verbosity: int, *, show_command: bool = False
+    job: Job, style: _Style, verbosity: int, *, show_command: bool = False, slot: int = 0
 ) -> None:
     """Print the per-job banner, gating each line by verbosity.
 
@@ -198,7 +200,8 @@ def _print_job_banner(
     * ``  + <command>`` — the ``uv run`` command as written (uv's own
       ``--quiet``/``-v`` flags are omitted); shown at ``-v``, and always under
       ``--dry-run``, whose purpose is to preview commands.
-    * ``  env: <dir>`` — the job's isolated environment directory; shown at ``-vv``.
+    * ``  env: <dir>`` — the job's isolated environment directory (for the
+      parallel ``slot`` it ran on); shown at ``-vv``.
 
     A net ``-q`` (verbosity below zero) suppresses the banner entirely.
     """
@@ -208,7 +211,7 @@ def _print_job_banner(
     if show_command or verbosity >= 1:
         print(style("dim", f"  + {job.command_str}"))
     if verbosity >= 2:
-        print(style("dim", f"  env: {ENV_DIR}/{job.env_key}"))
+        print(style("dim", f"  env: {ENV_DIR}/{_slot_dir(slot)}"))
 
 
 def _emit_output(output: str | None) -> None:
@@ -228,16 +231,24 @@ def _record_result(
     returncode: int,
     style: _Style,
     failed: list[tuple[Job, int]],
+    *,
+    stopping: bool = False,
 ) -> bool:
     """Record a finished job's exit code; return True when the run should stop.
 
     A non-zero exit is always a failure and always counts toward the final exit
     code. When the failing job's ``continue-on-error`` is true the run goes on to
-    the remaining jobs; otherwise the run stops after this failure.
+    the remaining jobs; otherwise the run stops after this failure. With
+    ``stopping`` true a stop is already in progress — the job merely finished
+    late — so the line carries no "(stopping)"/"(continuing)" suffix and no new
+    stop is requested.
     """
     if returncode == 0:
         return False
     failed.append((job, returncode))
+    if stopping:
+        print(style("red", f"  -> failed: exit {returncode}"))
+        return False
     if job.continue_on_error:
         print(style("red", f"  -> failed: exit {returncode} (continuing)"))
         return False
@@ -247,16 +258,20 @@ def _record_result(
 
 def _run_sequential(
     runnable: list[Job], root: Path, style: _Style, verbosity: int
-) -> list[tuple[Job, int]]:
-    """Run jobs one at a time, inheriting stdio so output streams live (no capture)."""
+) -> tuple[list[tuple[Job, int]], int]:
+    """Run jobs one at a time, inheriting stdio so output streams live (no capture).
+
+    Returns the failed jobs plus how many jobs were cancelled — never started
+    because a failure stopped the run.
+    """
     failed: list[tuple[Job, int]] = []
-    for job in runnable:
+    for index, job in enumerate(runnable):
         _print_job_banner(job, style, verbosity)
         env = _job_env(job, root)
         result = subprocess.run(spawn_args(_job_command(job, verbosity)), env=env, cwd=job.cwd)
         if _record_result(job, result.returncode, style, failed):
-            break
-    return failed
+            return failed, len(runnable) - index - 1
+    return failed, 0
 
 
 def _run_parallel(
@@ -265,55 +280,81 @@ def _run_parallel(
     parallel: int,
     style: _Style,
     verbosity: int,
-) -> list[tuple[Job, int]]:
+) -> tuple[list[tuple[Job, int]], int]:
     """Run up to ``parallel`` jobs at once, capturing each job's output.
 
     Output is captured per job (stderr folded into stdout) and printed as a
     single block after the job finishes, so concurrent jobs never interleave and
-    each block is identifiable by its banner. Jobs sharing an environment key are
-    serialized via a per-key lock so their ``uv sync`` calls do not race on the
-    same directory.
+    each block is identifiable by its banner. Each of the ``parallel`` slots uses
+    its own environment directory (``slot-<n>``), so two concurrent jobs never
+    sync the same directory and every job runs fully in parallel — no locking
+    needed. uv's hardlink-based cache keeps re-syncing a slot to a different
+    environment cheap.
 
     A failing job whose ``continue-on-error`` is false cancels jobs that have not
     started yet; jobs already running are allowed to finish and their output is
-    still reported.
+    still reported. Returns the failed jobs plus how many jobs were cancelled.
     """
-    env_locks: dict[str, threading.Lock] = {}
-    locks_guard = threading.Lock()
+    # Slots are borrowed for the duration of a job and returned when it exits.
+    # The pool has exactly `parallel` workers, so a slot is always available.
+    slots: queue.SimpleQueue[int] = queue.SimpleQueue()
+    for slot in range(parallel):
+        slots.put(slot)
 
-    def env_lock(key: str) -> threading.Lock:
-        with locks_guard:
-            return env_locks.setdefault(key, threading.Lock())
+    # `future.cancel()` alone leaves a window: a worker grabs the next queued
+    # job the instant its current one finishes, before the main thread has
+    # processed the failure and cancelled the pending futures. The stop is
+    # therefore decided in the worker itself — a failure whose job doesn't
+    # continue-on-error sets this event before the worker can pick up another
+    # job — and checked at the top of `run_one`, so a job that slipped past
+    # cancel() bails out (returning None) instead of launching.
+    stop = threading.Event()
 
-    def run_one(job: Job) -> subprocess.CompletedProcess[str]:
-        env = _job_env(job, root)
-        with env_lock(job.env_key):
-            return subprocess.run(
+    def run_one(job: Job) -> tuple[subprocess.CompletedProcess[str], int] | None:
+        if stop.is_set():
+            return None
+        slot = slots.get()
+        try:
+            result = subprocess.run(
                 spawn_args(_job_command(job, verbosity)),
-                env=env,
+                env=_job_env(job, root, slot),
                 cwd=job.cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+        finally:
+            slots.put(slot)
+        if result.returncode != 0 and not job.continue_on_error:
+            stop.set()
+        return result, slot
 
     failed: list[tuple[Job, int]] = []
+    cancelled = 0
     stopping = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
         futures = {executor.submit(run_one, job): job for job in runnable}
         for future in concurrent.futures.as_completed(futures):
             job = futures[future]
             try:
-                result = future.result()
+                outcome = future.result()
             except concurrent.futures.CancelledError:
+                cancelled += 1
                 continue
-            _print_job_banner(job, style, verbosity)
+            if outcome is None:
+                cancelled += 1
+                continue
+            result, slot = outcome
+            _print_job_banner(job, style, verbosity, slot=slot)
             _emit_output(result.stdout)
-            if _record_result(job, result.returncode, style, failed) and not stopping:
+            # `stopping` (not the event) drives the message: the worker has
+            # already set `stop` for this very failure, but only the first
+            # failure processed here should read "(stopping)".
+            if _record_result(job, result.returncode, style, failed, stopping=stopping):
                 stopping = True
                 for pending in futures:
                     pending.cancel()
-    return failed
+    return failed, cancelled
 
 
 def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> int:
@@ -324,7 +365,7 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
     posargs = getattr(args, "posargs", [])
     filters = parse_filters(config, args.filter or [])
     skipped: list[str] = []
-    for matrix_name, cell, task_name in _selected_for_run(config, args.matrix, args.task, filters):
+    for matrix_name, cell, task_name in _selected(config, args.matrix, args.task, filters):
         job = resolve_job(config, matrix_name, cell, task_name, task_defs, posargs)
         if job is not None:
             runnable.append(job)
@@ -345,13 +386,14 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
             print(style("dim", f"-- skipped (when): {label}"))
 
     failed: list[tuple[Job, int]] = []
+    cancelled = 0
     if args.dry_run:
         for job in runnable:
             _print_job_banner(job, style, verbosity, show_command=True)
     elif parallel > 1:
-        failed = _run_parallel(runnable, root, parallel, style, verbosity)
+        failed, cancelled = _run_parallel(runnable, root, parallel, style, verbosity)
     else:
-        failed = _run_sequential(runnable, root, style, verbosity)
+        failed, cancelled = _run_sequential(runnable, root, style, verbosity)
 
     if verbosity >= 0:
         print()
@@ -360,6 +402,11 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
             # exclusion is never invisible (issue #7); the per-job lines above stay -v-only.
             noun = "job" if len(skipped) == 1 else "jobs"
             print(style("dim", f"{len(skipped)} {noun} skipped (when)"))
+        if cancelled:
+            # Jobs that never ran because a failure stopped the run; without this
+            # the summary reads as if the run covered everything (issue #23).
+            noun = "job" if cancelled == 1 else "jobs"
+            print(style("dim", f"{cancelled} {noun} cancelled"))
     if failed:
         print(style("red", "Failed jobs:"))
         for job, code in failed:
@@ -440,6 +487,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "list", parents=[common], help="list selectable jobs without evaluating or running them"
     )
     list_p.add_argument("task", nargs="?", help="show only this task")
+    list_p.add_argument(
+        "-m", "--matrix", metavar="NAME", help="show only the matrix with this name"
+    )
     list_p.add_argument("-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP)
     list_p.set_defaults(func=_cmd_list)
 

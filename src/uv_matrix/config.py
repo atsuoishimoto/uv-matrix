@@ -28,6 +28,31 @@ EXCLUDE_KEY = "exclude"
 # word to remember; the two live in different parent tables and never collide.
 TASK_DEFS_TABLE = "tasks"
 
+# Keys accepted directly under [tool.uv-matrix]. Anything else is a typo or a
+# leftover from an older config shape (e.g. `fail-fast`, `task` singular) and
+# is rejected up front rather than silently ignored.
+TOP_LEVEL_KEYS = frozenset(
+    {"continue-on-error", "max-jobs", "env", "envfile", "vars", "matrix", TASK_DEFS_TABLE}
+)
+
+# Keys accepted in a task table [tool.uv-matrix.tasks.<name>]. A misspelled
+# field (`group` for `groups`, `env-file` for `envfile`) would otherwise run
+# the job without the intended settings, so unknown keys are an error.
+TASK_KEYS = frozenset(
+    {
+        "run",
+        "groups",
+        "extras",
+        "uv-args",
+        "env",
+        "envfile",
+        "cwd",
+        "when",
+        "python-version",
+        "continue-on-error",
+    }
+)
+
 
 class ConfigError(Exception):
     """Raised when the uv-matrix configuration is missing or invalid."""
@@ -68,15 +93,50 @@ def validate_axis_name(name: str) -> str:
     return validate_name(name, "matrix axis name")
 
 
-def validate_config_names(config: dict[str, Any]) -> None:
-    """Validate every matrix name, axis name, and ``vars`` key up front.
+def _reject_unknown_keys(table: dict[str, Any], known: frozenset[str], owner: str) -> None:
+    """Raise ``ConfigError`` when ``table`` contains keys outside ``known``.
 
-    Called once after the config is loaded so both ``list`` and ``run`` reject an
-    invalid name with a clear error. Within a single matrix, two axes whose names
-    collapse to the same underscore form (e.g. ``a-b`` and ``a_b``) are rejected:
-    they would map to the same top-level template/expression alias and so be
-    ambiguous.
+    ``owner`` labels the table in the error message. Rejecting rather than
+    ignoring means a typo (``group`` for ``groups``, ``env-file`` for
+    ``envfile``) fails loudly instead of quietly running the job without the
+    intended settings — the same "error over silent no-match" stance
+    :func:`parse_filters` takes for filters.
     """
+    unknown = [key for key in table if key not in known]
+    if unknown:
+        names = ", ".join(repr(key) for key in unknown)
+        noun = "key" if len(unknown) == 1 else "keys"
+        raise ConfigError(f"{owner}: unknown {noun} {names}; known keys: {', '.join(sorted(known))}")
+
+
+def validate_config_names(config: dict[str, Any]) -> None:
+    """Validate names and reject unknown configuration keys up front.
+
+    Called once after the config is loaded so both ``list`` and ``run`` reject a
+    bad config with a clear error. Checks every matrix name, axis name, and
+    ``vars`` key, and rejects unknown keys at the top level of
+    ``[tool.uv-matrix]`` and in each task table — a misspelled field would
+    otherwise be silently ignored and change what the job does. Within a single
+    matrix, two axes whose names collapse to the same underscore form (e.g.
+    ``a-b`` and ``a_b``) are rejected: they would map to the same top-level
+    template/expression alias and so be ambiguous.
+
+    The shapes of the table-valued members are also checked here, so a wrong
+    shape (``vars = ["oops"]``) fails with a clear error up front instead of an
+    ``AttributeError`` deep inside expansion or context building.
+    """
+    for key in ("matrix", TASK_DEFS_TABLE, "vars", "env"):
+        value = config.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise ConfigError(f"[tool.{CONFIG_TABLE}] {key!r} must be a table")
+
+    _reject_unknown_keys(config, TOP_LEVEL_KEYS, f"[tool.{CONFIG_TABLE}]")
+
+    for task_name, task_def in config.get(TASK_DEFS_TABLE, {}).items():
+        if not isinstance(task_def, dict):
+            raise ConfigError(f"task {task_name!r} must be a table")
+        _reject_unknown_keys(task_def, TASK_KEYS, f"task {task_name!r}")
+
     for matrix_name, matrix_def in config.get("matrix", {}).items():
         validate_name(matrix_name, "matrix name")
         if not isinstance(matrix_def, dict):
@@ -142,9 +202,12 @@ def load_config(pyproject: Path | str | None = None) -> dict[str, Any]:
         raise ConfigError(f"{path}: invalid TOML: {exc}") from exc
 
     try:
-        return data["tool"][CONFIG_TABLE]
+        table = data["tool"][CONFIG_TABLE]
     except (KeyError, TypeError):
         raise ConfigError(f"{path}: missing [tool.{CONFIG_TABLE}] table") from None
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [tool.{CONFIG_TABLE}] must be a table")
+    return table
 
 
 def expand_matrix(axes: dict[str, Any]) -> list[dict[str, Any]]:
@@ -187,19 +250,31 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
                 )
 
         axes = matrix_axes(matrix_def)
+        # expand_matrix validates that every axis is an array, so the value
+        # checks below can safely test membership in axes[key].
+        cells = expand_matrix(axes)
         exclude_rules = matrix_def.get(EXCLUDE_KEY, [])
         if not isinstance(exclude_rules, list):
             raise ConfigError(f"matrix {matrix_name!r}: 'exclude' must be an array")
         for rule in exclude_rules:
             if not isinstance(rule, dict):
                 raise ConfigError(f"matrix {matrix_name!r}: 'exclude' items must be tables")
-            for key in rule:
+            for key, val in rule.items():
                 if key not in axes:
                     raise ConfigError(
                         f"matrix {matrix_name!r}: 'exclude' item key {key!r} is not a valid axis"
                     )
+                # Membership uses the same raw comparison as the matching below,
+                # so a rule that could never match any cell (typo or type
+                # mismatch) is an error instead of a silent no-op.
+                if val not in axes[key]:
+                    known = ", ".join(repr(v) for v in axes[key])
+                    raise ConfigError(
+                        f"matrix {matrix_name!r}: 'exclude' value {val!r} for axis {key!r} "
+                        f"matches no axis value; values: {known}"
+                    )
 
-        for cell in expand_matrix(axes):
+        for cell in cells:
             should_exclude = False
             for exclude_rule in exclude_rules:
                 if exclude_rule:

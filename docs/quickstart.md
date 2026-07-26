@@ -88,13 +88,14 @@ Four pytest jobs (one per interpreter) plus the two single checks.
 uv run uv-matrix run
 ```
 
-`uv-matrix` runs each job in its own isolated environment under
-`.uv-matrix/<key>/`, leaving your project's `.venv` untouched. Each job prints
-its banner and the environment it uses:
+`uv-matrix` runs each job in an isolated environment under
+`.uv-matrix/slot-<n>/` (one directory per parallel slot; sequential runs use
+`slot-0`), leaving your project's `.venv` untouched. Each job prints its banner
+and, at `-vv`, the environment it uses:
 
 ```text
 ==> test:pytest python-version=3.10
-  env: .uv-matrix/py3.10-1a2b3c4d
+  env: .uv-matrix/slot-0
 ...
 All jobs passed.
 ```

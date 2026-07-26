@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 import shlex
 import subprocess
 import sys
@@ -16,8 +14,6 @@ from dotenv import dotenv_values
 
 from .config import CONFIG_TABLE
 from .evaluate import build_context, eval_expr, render_string, render_template
-
-_UNSAFE = re.compile(r"[^A-Za-z0-9.+_-]")
 
 
 def _shell_command(run: str) -> list[str]:
@@ -79,7 +75,6 @@ class Job:
     env: dict[str, str]
     cwd: str | None
     continue_on_error: bool
-    env_key: str
 
     @property
     def label(self) -> str:
@@ -118,22 +113,6 @@ def _rendered_list(
     return result
 
 
-def _env_key(
-    python_version: str | None, groups: list[str], extras: list[str], uv_args: list[str]
-) -> str:
-    """Stable directory name for the isolated environment of this job.
-
-    Keyed by everything that determines the environment's contents, so jobs that
-    resolve to the same environment share one directory and different ones never
-    collide. The Python version is kept readable; the rest goes into a hash.
-    When no version is pinned, ``default`` stands in for uv's chosen interpreter.
-    """
-    raw = repr((python_version, groups, extras, uv_args))
-    digest = hashlib.sha256(raw.encode()).hexdigest()[:8]
-    label = _UNSAFE.sub("_", f"py{python_version or 'default'}")
-    return f"{label}-{digest}"
-
-
 def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
     """Load ``envfile`` paths into a flat ``{name: value}`` mapping.
 
@@ -164,6 +143,10 @@ def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
 
     result: dict[str, str] = {}
     for entry in paths:
+        if not isinstance(entry, str):
+            raise TaskError(
+                f"{owner}: envfile entry must be a string, got {type(entry).__name__}"
+            )
         path = render_string(entry, ctx)
         if not Path(path).is_file():
             raise TaskError(f"{owner}: envfile {path!r} not found")
@@ -173,12 +156,25 @@ def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
 
 
 def _rendered_env(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
-    """Render an ``env`` table's values as templates (keys stay literal)."""
+    """Render an ``env`` table's values as templates (keys stay literal).
+
+    Each value must be a string; anything else (e.g. ``PORT = 8080``) is
+    rejected here with the owning table and key named, rather than letting
+    ``render_string`` raise a context-free type error (issue #18).
+    """
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise TaskError(f"{owner}: 'env' must be a table")
-    return {str(key): render_string(value, ctx) for key, value in raw.items()}
+    result: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(value, str):
+            raise TaskError(
+                f"{owner}: env value for {str(key)!r} must be a string, "
+                f"got {type(value).__name__}"
+            )
+        result[str(key)] = render_string(value, ctx)
+    return result
 
 
 def resolve_job(
@@ -271,5 +267,4 @@ def resolve_job(
         env=env,
         cwd=cwd,
         continue_on_error=continue_on_error,
-        env_key=_env_key(python_version, groups, extras, uv_args),
     )

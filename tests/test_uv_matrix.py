@@ -124,6 +124,63 @@ def test_validate_config_names_rejects_colliding_axis_aliases():
         validate_config_names(config)
 
 
+def test_validate_config_names_rejects_misspelled_task_fields():
+    # Typos like `group`/`extra`/`env-file` must fail instead of silently
+    # running the job without the intended settings (issue #19).
+    for typo in ("group", "extra", "env-file"):
+        config = {
+            "matrix": {"m": {"x": ["a"], "tasks": ["t"]}},
+            "tasks": {"t": {"run": "pytest", typo: ["dev"]}},
+        }
+        with pytest.raises(ConfigError, match=f"task 't': unknown key '{typo}'"):
+            validate_config_names(config)
+
+
+def test_validate_config_names_rejects_unknown_top_level_keys():
+    # `fail-fast` (removed) and `task` (singular) are leftovers/typos.
+    with pytest.raises(ConfigError, match=r"\[tool.uv-matrix\]: unknown key 'fail-fast'"):
+        validate_config_names({"fail-fast": True, "matrix": {"m": {"tasks": ["t"]}}})
+    with pytest.raises(ConfigError, match="unknown key 'task'"):
+        validate_config_names({"task": {"t": {"run": "pytest"}}})
+
+
+def test_validate_config_names_lists_all_unknown_keys():
+    config = {"tasks": {"t": {"run": "pytest", "group": ["dev"], "extra": ["web"]}}}
+    with pytest.raises(ConfigError, match="unknown keys 'group', 'extra'"):
+        validate_config_names(config)
+
+
+def test_validate_config_names_accepts_all_known_task_fields():
+    config = {
+        "continue-on-error": True,
+        "max-jobs": 2,
+        "env": {"A": "1"},
+        "envfile": ".env",
+        "vars": {"reports": "'.reports'"},
+        "matrix": {"m": {"python-version": ["3.13"], "tasks": ["t"]}},
+        "tasks": {
+            "t": {
+                "run": "pytest",
+                "groups": ["dev"],
+                "extras": ["web"],
+                "uv-args": ["--no-default-groups"],
+                "env": {"B": "2"},
+                "envfile": ".env",
+                "cwd": "sub",
+                "when": "True",
+                "python-version": "3.13",
+                "continue-on-error": False,
+            }
+        },
+    }
+    validate_config_names(config)  # does not raise
+
+
+def test_validate_config_names_rejects_non_table_task_def():
+    with pytest.raises(ConfigError, match="task 't' must be a table"):
+        validate_config_names({"tasks": {"t": "pytest"}})
+
+
 def test_matrix_axes_strips_tasks_and_validates():
     assert matrix_axes({"python": ["3.13"], "tasks": ["t"]}) == {"python": ["3.13"]}
     with pytest.raises(ConfigError):
@@ -530,6 +587,31 @@ def test_resolve_job_envfile_missing_raises(tmp_path, monkeypatch):
         resolve_job({}, "m", {}, "test", tasks)
 
 
+def test_resolve_job_task_env_non_string_value_names_task_and_key():
+    tasks = {"test": {"run": "pytest", "env": {"PORT": 8080}}}
+    with pytest.raises(
+        TaskError, match=r"task 'test': env value for 'PORT' must be a string, got int"
+    ):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
+def test_resolve_job_top_level_env_non_string_value_names_table_and_key():
+    config = {"env": {"DEBUG": True}}
+    tasks = {"test": {"run": "pytest"}}
+    with pytest.raises(
+        TaskError, match=r"\[tool.uv-matrix\]: env value for 'DEBUG' must be a string, got bool"
+    ):
+        resolve_job(config, "m", {}, "test", tasks)
+
+
+def test_resolve_job_envfile_non_string_entry_names_task(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    tasks = {"test": {"run": "pytest", "envfile": [".env", 1]}}
+    (tmp_path / ".env").write_text("FOO=1\n")
+    with pytest.raises(TaskError, match=r"task 'test': envfile entry must be a string, got int"):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
 def test_resolve_job_top_level_env_applies_to_every_job():
     config = {"env": {"FOO": "global"}}
     tasks = {"test": {"run": "pytest"}, "lint": {"run": "ruff check ."}}
@@ -610,18 +692,6 @@ def test_resolve_job_posargs_default_renders_empty():
     tasks = {"test": {"python-version": "3.12", "run": "pytest {{ posargs }}"}}
     job = resolve_job({}, "m", {}, "test", tasks)
     assert job.command[-3:] == _shell_command("pytest ")
-
-
-def test_env_key_stable_and_distinct():
-    base = {"python-version": "3.12", "groups": ["test"], "run": "pytest"}
-    a = resolve_job({}, "m", {}, "t", {"t": base})
-    b = resolve_job({}, "other", {}, "t", {"t": base})  # same env inputs -> same key
-    c = resolve_job({}, "m", {}, "t", {"t": {**base, "groups": ["lint"]}})  # different groups
-    d = resolve_job({}, "m", {}, "t", {"t": {**base, "python-version": "3.13"}})
-    assert a.env_key == b.env_key
-    assert a.env_key != c.env_key
-    assert a.env_key != d.env_key
-    assert a.env_key.startswith("py3.12-")
 
 
 def test_parse_filters_groups_by_key():
@@ -870,6 +940,38 @@ def test_main_run_unknown_task_errors(tmp_path, monkeypatch, capsys):
     assert "unknown task" in capsys.readouterr().err
 
 
+def test_main_list_unknown_task_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # `list` validates the task name the same way `run --task` does (issue #21),
+    # so a typo errors instead of printing nothing with exit 0.
+    assert main(["list", "nope"]) == 1
+    assert "unknown task" in capsys.readouterr().err
+
+
+def test_main_list_unknown_matrix_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["list", "--matrix", "nope"]) == 1
+    assert "unknown matrix" in capsys.readouterr().err
+
+
+def test_main_list_matrix_option_selects(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["list", "--matrix", "checks"]) == 0
+    out = capsys.readouterr().out
+    assert "checks:lint" in out
+    assert "checks:test" in out
+    assert "test:test" not in out
+
+
 def test_main_filter_unknown_key_errors(tmp_path, monkeypatch, capsys):
     from uv_matrix.cli import main
 
@@ -909,7 +1011,7 @@ def test_list_does_not_evaluate(capsys):
         # `when` and the template would raise if list evaluated them:
         "tasks": {"t": {"python-version": "{{ matrix['MISSING'] }}", "run": "x", "when": "1 / 0"}},
     }
-    rc = _cmd_list(config, argparse.Namespace(task=None, filter=None), Path("."))
+    rc = _cmd_list(config, argparse.Namespace(task=None, matrix=None, filter=None), Path("."))
     assert rc == 0
     assert "m:t python=3.11" in capsys.readouterr().out
 
@@ -1250,7 +1352,7 @@ def test_banner_very_verbose_adds_env_line(tmp_path, monkeypatch, capsys):
     # -vv adds the env line, and uv keeps its default (chatty) output.
     out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-vv"])
     assert _banner_command_line() in out
-    assert "  env: .uv-matrix/py3.11-" in out
+    assert "  env: .uv-matrix/slot-0" in out
     assert "--quiet" not in command
 
 
@@ -1272,6 +1374,49 @@ def test_load_config_missing_table(tmp_path):
     pyproject.write_text("[project]\nname = 'x'\n", encoding="utf-8")
     with pytest.raises(ConfigError):
         load_config(pyproject)
+
+
+def test_load_config_rejects_non_table(tmp_path):
+    # `uv-matrix = 3` under [tool] used to escape as an AttributeError later on
+    # (issue #22); the wrong shape must fail at load time instead.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("[tool]\nuv-matrix = 3\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="must be a table"):
+        load_config(pyproject)
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [("matrix", 3), ("tasks", 3), ("vars", ["oops"]), ("env", "PATH=/x")],
+)
+def test_validate_config_names_rejects_non_table_members(key, value):
+    # A wrong shape for a table-valued member used to crash deep inside
+    # expansion or context building (issue #22).
+    with pytest.raises(ConfigError, match=f"{key!r} must be a table"):
+        validate_config_names({key: value})
+
+
+def test_main_non_table_config_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    (tmp_path / "pyproject.toml").write_text("[tool]\nuv-matrix = 3\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert main(["run"]) == 1
+    assert "must be a table" in capsys.readouterr().err
+
+
+def test_main_non_table_vars_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.uv-matrix]\nvars = ['oops']\n"
+        "[tool.uv-matrix.matrix.m]\ntasks = ['t']\n"
+        "[tool.uv-matrix.tasks.t]\nrun = 'echo hi'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(["run"]) == 1
+    assert "'vars' must be a table" in capsys.readouterr().err
 
 
 def test_find_pyproject_walks_up_like_uv(tmp_path, monkeypatch):
@@ -1331,8 +1476,11 @@ def test_run_sequential_inherits_stdio(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    failed = cli._run_sequential([_simple_job()], Path("."), style=cli._Style(False), verbosity=0)
+    failed, cancelled = cli._run_sequential(
+        [_simple_job()], Path("."), style=cli._Style(False), verbosity=0
+    )
     assert failed == []
+    assert cancelled == 0
     # No stdout/stderr capture kwargs were passed.
     assert seen == [{}]
 
@@ -1351,13 +1499,91 @@ def test_run_parallel_runs_all_and_captures(monkeypatch, capsys):
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     jobs = [_simple_job(python_version=v) for v in ("3.11", "3.12", "3.13")]
-    failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    failed, cancelled = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
     assert failed == []
+    assert cancelled == 0
     assert len(seen) == 3
     # Output is captured (stderr folded into stdout) rather than inherited.
     assert all(kw.get("stdout") is subprocess.PIPE for kw in seen)
     assert all(kw.get("stderr") is subprocess.STDOUT for kw in seen)
     assert capsys.readouterr().out.count("hello") == 3
+
+
+def test_slot_dir_names():
+    from uv_matrix import cli
+
+    assert cli._slot_dir(0) == "slot-0"
+    assert cli._slot_dir(3) == "slot-3"
+
+
+def test_job_env_uses_slot_directory():
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    job = _simple_job()
+    root = Path("/proj")
+    # Sequential runs default to slot 0.
+    assert cli._job_env(job, root)["UV_PROJECT_ENVIRONMENT"] == str(
+        root / cli.ENV_DIR / "slot-0"
+    )
+    assert cli._job_env(job, root, slot=2)["UV_PROJECT_ENVIRONMENT"] == str(
+        root / cli.ENV_DIR / "slot-2"
+    )
+
+
+def test_run_parallel_jobs_run_concurrently_in_distinct_dirs(monkeypatch):
+    # Concurrent jobs each borrow their own slot, so they overlap in time and
+    # never share an environment directory — no serialization, no locking.
+    import subprocess
+    import threading
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    both_running = threading.Barrier(2, timeout=10)
+    env_dirs = []
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        env_dirs.append(env["UV_PROJECT_ENVIRONMENT"])
+        # Blocks until both jobs are inside subprocess.run at once — this would
+        # deadlock (and time out) if identical jobs were serialized.
+        both_running.wait()
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job(), _simple_job()]
+    failed, _ = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
+    assert failed == []
+    assert len(set(env_dirs)) == 2
+
+
+def test_run_parallel_slots_are_bounded_and_reused(monkeypatch):
+    # With parallel=2, every job lands on slot 0 or slot 1 regardless of how
+    # many jobs run in total.
+    import subprocess
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    env_dirs = set()
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        env_dirs.add(env["UV_PROJECT_ENVIRONMENT"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job() for _ in range(6)]
+    failed, _ = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
+    assert failed == []
+    expected = {str(Path(".") / cli.ENV_DIR / name) for name in ("slot-0", "slot-1")}
+    assert env_dirs <= expected
 
 
 def test_run_parallel_continue_on_error_collects_all_failures(monkeypatch):
@@ -1374,8 +1600,11 @@ def test_run_parallel_continue_on_error_collects_all_failures(monkeypatch):
     jobs = [
         _simple_job(python_version=v, continue_on_error=True) for v in ("3.11", "3.12", "3.13")
     ]
-    failed = cli._run_parallel(jobs, Path("."), parallel=3, style=cli._Style(False), verbosity=0)
+    failed, cancelled = cli._run_parallel(
+        jobs, Path("."), parallel=3, style=cli._Style(False), verbosity=0
+    )
     assert len(failed) == 3
+    assert cancelled == 0
     assert all(code == 2 for _, code in failed)
 
 
@@ -1393,8 +1622,108 @@ def test_run_parallel_continue_on_error_still_counts_as_failure(monkeypatch):
         return subprocess.CompletedProcess(cmd, 1, stdout="")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    failed = cli._run_parallel([job], Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    failed, _ = cli._run_parallel(
+        [job], Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
     assert len(failed) == 1
+
+
+def test_record_result_late_failure_during_stop(capsys):
+    # A job that fails after a stop is already in progress is a plain failure:
+    # no repeated "(stopping)" suffix, and no new stop request (issue #23).
+    from uv_matrix import cli
+
+    failed = []
+    job = _simple_job()
+    should_stop = cli._record_result(job, 1, cli._Style(False), failed, stopping=True)
+    assert should_stop is False
+    assert failed == [(job, 1)]
+    out = capsys.readouterr().out
+    assert "failed: exit 1" in out
+    assert "(stopping)" not in out
+    assert "(continuing)" not in out
+
+
+def test_run_sequential_stop_counts_remaining_as_cancelled(monkeypatch):
+    import subprocess
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job(python_version=v) for v in ("3.11", "3.12", "3.13")]
+    failed, cancelled = cli._run_sequential(jobs, Path("."), style=cli._Style(False), verbosity=0)
+    assert len(failed) == 1
+    assert cancelled == 2
+
+
+def test_run_parallel_stop_closes_cancel_race(monkeypatch):
+    # A worker grabs the next queued job the instant its current one finishes —
+    # possibly before the main thread has processed the failure and called
+    # future.cancel(). The stop event makes such a job bail out instead of
+    # launching (issue #23). Setup: the two "park" jobs hold both workers until
+    # the stop event is set, so the tail job can only be picked up after the
+    # stop is visible — it must never launch, and every job is accounted for.
+    import subprocess
+    import threading
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    events = []
+    real_event = threading.Event
+
+    def spy_event():
+        event = real_event()
+        events.append(event)
+        return event
+
+    monkeypatch.setattr(cli.threading, "Event", spy_event)
+
+    ran = []
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        version = cmd[cmd.index("--python") + 1]
+        ran.append(version)
+        if version == "fail":
+            return subprocess.CompletedProcess(cmd, 1, stdout="")
+        # Keep this worker busy until the stop is in effect.
+        assert events[0].wait(timeout=10)
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job(python_version=v) for v in ("fail", "park-1", "park-2", "tail")]
+    failed, cancelled = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
+    assert [(job.label, code) for job, code in failed] == [(jobs[0].label, 1)]
+    # The tail job never launched, and no job silently vanished: everything is
+    # either run or counted as cancelled.
+    assert "tail" not in ran
+    assert cancelled >= 1
+    assert len(ran) + cancelled == len(jobs)
+
+
+def test_main_run_summary_counts_cancelled_jobs(tmp_path, monkeypatch, capsys):
+    import subprocess
+
+    from uv_matrix import cli
+    from uv_matrix.cli import main
+
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert main(["run"]) == 1
+    out = capsys.readouterr().out
+    assert "1 job cancelled" in out
+    assert "Failed jobs:" in out
 
 
 def test_main_run_parallel_executes(tmp_path, monkeypatch, capsys):
@@ -1529,6 +1858,29 @@ def test_iter_plan_exclude_invalid_structure():
         ConfigError, match="'exclude' item key 'python-version' is not a valid axis"
     ):
         list(iter_plan(config_invalid_key))
+
+
+def test_iter_plan_exclude_unknown_value():
+    # A value that matches no axis value is an error, not a silent no-op.
+    config = {
+        "matrix": {"m": {"x": ["a", "b"], "tasks": ["t"], "exclude": [{"x": "c"}]}}
+    }
+    with pytest.raises(
+        ConfigError, match=r"'exclude' value 'c' for axis 'x' matches no axis value"
+    ):
+        list(iter_plan(config))
+
+
+def test_iter_plan_exclude_value_type_mismatch():
+    # Comparison is raw: the string "1" can never match an int axis value, so
+    # the rule is rejected instead of silently excluding nothing.
+    config = {
+        "matrix": {"m": {"nums": [1, 2], "tasks": ["t"], "exclude": [{"nums": "1"}]}}
+    }
+    with pytest.raises(
+        ConfigError, match=r"'exclude' value '1' for axis 'nums' matches no axis value"
+    ):
+        list(iter_plan(config))
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX passthrough branch")
