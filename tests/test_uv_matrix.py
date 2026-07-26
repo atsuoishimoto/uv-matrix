@@ -1320,6 +1320,49 @@ def test_load_config_missing_table(tmp_path):
         load_config(pyproject)
 
 
+def test_load_config_rejects_non_table(tmp_path):
+    # `uv-matrix = 3` under [tool] used to escape as an AttributeError later on
+    # (issue #22); the wrong shape must fail at load time instead.
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text("[tool]\nuv-matrix = 3\n", encoding="utf-8")
+    with pytest.raises(ConfigError, match="must be a table"):
+        load_config(pyproject)
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [("matrix", 3), ("tasks", 3), ("vars", ["oops"]), ("env", "PATH=/x")],
+)
+def test_validate_config_names_rejects_non_table_members(key, value):
+    # A wrong shape for a table-valued member used to crash deep inside
+    # expansion or context building (issue #22).
+    with pytest.raises(ConfigError, match=f"{key!r} must be a table"):
+        validate_config_names({key: value})
+
+
+def test_main_non_table_config_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    (tmp_path / "pyproject.toml").write_text("[tool]\nuv-matrix = 3\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    assert main(["run"]) == 1
+    assert "must be a table" in capsys.readouterr().err
+
+
+def test_main_non_table_vars_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.uv-matrix]\nvars = ['oops']\n"
+        "[tool.uv-matrix.matrix.m]\ntasks = ['t']\n"
+        "[tool.uv-matrix.tasks.t]\nrun = 'echo hi'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    assert main(["run"]) == 1
+    assert "'vars' must be a table" in capsys.readouterr().err
+
+
 def test_find_pyproject_walks_up_like_uv(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
     nested = tmp_path / "src" / "pkg"
