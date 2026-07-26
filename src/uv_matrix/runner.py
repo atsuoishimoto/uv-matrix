@@ -115,6 +115,10 @@ def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
 
     result: dict[str, str] = {}
     for entry in paths:
+        if not isinstance(entry, str):
+            raise TaskError(
+                f"{owner}: envfile entry must be a string, got {type(entry).__name__}"
+            )
         path = render_string(entry, ctx)
         if not Path(path).is_file():
             raise TaskError(f"{owner}: envfile {path!r} not found")
@@ -124,12 +128,25 @@ def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
 
 
 def _rendered_env(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
-    """Render an ``env`` table's values as templates (keys stay literal)."""
+    """Render an ``env`` table's values as templates (keys stay literal).
+
+    Each value must be a string; anything else (e.g. ``PORT = 8080``) is
+    rejected here with the owning table and key named, rather than letting
+    ``render_string`` raise a context-free type error (issue #18).
+    """
     if raw is None:
         return {}
     if not isinstance(raw, dict):
         raise TaskError(f"{owner}: 'env' must be a table")
-    return {str(key): render_string(value, ctx) for key, value in raw.items()}
+    result: dict[str, str] = {}
+    for key, value in raw.items():
+        if not isinstance(value, str):
+            raise TaskError(
+                f"{owner}: env value for {str(key)!r} must be a string, "
+                f"got {type(value).__name__}"
+            )
+        result[str(key)] = render_string(value, ctx)
+    return result
 
 
 def resolve_job(

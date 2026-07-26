@@ -581,6 +581,31 @@ def test_resolve_job_envfile_missing_raises(tmp_path, monkeypatch):
         resolve_job({}, "m", {}, "test", tasks)
 
 
+def test_resolve_job_task_env_non_string_value_names_task_and_key():
+    tasks = {"test": {"run": "pytest", "env": {"PORT": 8080}}}
+    with pytest.raises(
+        TaskError, match=r"task 'test': env value for 'PORT' must be a string, got int"
+    ):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
+def test_resolve_job_top_level_env_non_string_value_names_table_and_key():
+    config = {"env": {"DEBUG": True}}
+    tasks = {"test": {"run": "pytest"}}
+    with pytest.raises(
+        TaskError, match=r"\[tool.uv-matrix\]: env value for 'DEBUG' must be a string, got bool"
+    ):
+        resolve_job(config, "m", {}, "test", tasks)
+
+
+def test_resolve_job_envfile_non_string_entry_names_task(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    tasks = {"test": {"run": "pytest", "envfile": [".env", 1]}}
+    (tmp_path / ".env").write_text("FOO=1\n")
+    with pytest.raises(TaskError, match=r"task 'test': envfile entry must be a string, got int"):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
 def test_resolve_job_top_level_env_applies_to_every_job():
     config = {"env": {"FOO": "global"}}
     tasks = {"test": {"run": "pytest"}, "lint": {"run": "ruff check ."}}
