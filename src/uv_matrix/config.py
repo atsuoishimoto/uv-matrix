@@ -76,7 +76,15 @@ def validate_config_names(config: dict[str, Any]) -> None:
     collapse to the same underscore form (e.g. ``a-b`` and ``a_b``) are rejected:
     they would map to the same top-level template/expression alias and so be
     ambiguous.
+
+    The shapes of the table-valued members are also checked here, so a wrong
+    shape (``vars = ["oops"]``) fails with a clear error up front instead of an
+    ``AttributeError`` deep inside expansion or context building.
     """
+    for key in ("matrix", TASK_DEFS_TABLE, "vars", "env"):
+        value = config.get(key)
+        if value is not None and not isinstance(value, dict):
+            raise ConfigError(f"[tool.{CONFIG_TABLE}] {key!r} must be a table")
     for matrix_name, matrix_def in config.get("matrix", {}).items():
         validate_name(matrix_name, "matrix name")
         if not isinstance(matrix_def, dict):
@@ -142,9 +150,12 @@ def load_config(pyproject: Path | str | None = None) -> dict[str, Any]:
         raise ConfigError(f"{path}: invalid TOML: {exc}") from exc
 
     try:
-        return data["tool"][CONFIG_TABLE]
+        table = data["tool"][CONFIG_TABLE]
     except (KeyError, TypeError):
         raise ConfigError(f"{path}: missing [tool.{CONFIG_TABLE}] table") from None
+    if not isinstance(table, dict):
+        raise ConfigError(f"{path}: [tool.{CONFIG_TABLE}] must be a table")
+    return table
 
 
 def expand_matrix(axes: dict[str, Any]) -> list[dict[str, Any]]:
