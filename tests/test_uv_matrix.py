@@ -852,6 +852,38 @@ def test_main_run_unknown_task_errors(tmp_path, monkeypatch, capsys):
     assert "unknown task" in capsys.readouterr().err
 
 
+def test_main_list_unknown_task_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # `list` validates the task name the same way `run --task` does (issue #21),
+    # so a typo errors instead of printing nothing with exit 0.
+    assert main(["list", "nope"]) == 1
+    assert "unknown task" in capsys.readouterr().err
+
+
+def test_main_list_unknown_matrix_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["list", "--matrix", "nope"]) == 1
+    assert "unknown matrix" in capsys.readouterr().err
+
+
+def test_main_list_matrix_option_selects(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["list", "--matrix", "checks"]) == 0
+    out = capsys.readouterr().out
+    assert "checks:lint" in out
+    assert "checks:test" in out
+    assert "test:test" not in out
+
+
 def test_main_filter_unknown_key_errors(tmp_path, monkeypatch, capsys):
     from uv_matrix.cli import main
 
@@ -891,7 +923,7 @@ def test_list_does_not_evaluate(capsys):
         # `when` and the template would raise if list evaluated them:
         "tasks": {"t": {"python-version": "{{ matrix['MISSING'] }}", "run": "x", "when": "1 / 0"}},
     }
-    rc = _cmd_list(config, argparse.Namespace(task=None, filter=None), Path("."))
+    rc = _cmd_list(config, argparse.Namespace(task=None, matrix=None, filter=None), Path("."))
     assert rc == 0
     assert "m:t python=3.11" in capsys.readouterr().out
 

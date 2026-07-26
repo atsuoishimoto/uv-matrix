@@ -132,6 +132,7 @@ uv-matrix run --max-jobs 4               # run up to 4 jobs at once
 uv-matrix run --dry-run                  # print commands without running them
 uv-matrix run --task run_test -- -k slow # pass extra args as {{ posargs }}
 uv-matrix list                           # list selectable jobs
+uv-matrix list --matrix test             # list only one matrix's jobs
 ```
 
 By default, `uv-matrix` finds `pyproject.toml` by walking up from the current directory, then runs from the project root.
