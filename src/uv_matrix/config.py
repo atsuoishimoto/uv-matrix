@@ -187,19 +187,31 @@ def iter_plan(config: dict[str, Any]) -> Iterator[tuple[str, dict[str, Any], str
                 )
 
         axes = matrix_axes(matrix_def)
+        # expand_matrix validates that every axis is an array, so the value
+        # checks below can safely test membership in axes[key].
+        cells = expand_matrix(axes)
         exclude_rules = matrix_def.get(EXCLUDE_KEY, [])
         if not isinstance(exclude_rules, list):
             raise ConfigError(f"matrix {matrix_name!r}: 'exclude' must be an array")
         for rule in exclude_rules:
             if not isinstance(rule, dict):
                 raise ConfigError(f"matrix {matrix_name!r}: 'exclude' items must be tables")
-            for key in rule:
+            for key, val in rule.items():
                 if key not in axes:
                     raise ConfigError(
                         f"matrix {matrix_name!r}: 'exclude' item key {key!r} is not a valid axis"
                     )
+                # Membership uses the same raw comparison as the matching below,
+                # so a rule that could never match any cell (typo or type
+                # mismatch) is an error instead of a silent no-op.
+                if val not in axes[key]:
+                    known = ", ".join(repr(v) for v in axes[key])
+                    raise ConfigError(
+                        f"matrix {matrix_name!r}: 'exclude' value {val!r} for axis {key!r} "
+                        f"matches no axis value; values: {known}"
+                    )
 
-        for cell in expand_matrix(axes):
+        for cell in cells:
             should_exclude = False
             for exclude_rule in exclude_rules:
                 if exclude_rule:
