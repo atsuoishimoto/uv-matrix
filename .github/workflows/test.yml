@@ -27,13 +27,9 @@ jobs:
         with:
           enable-cache: true
 
-      # uv-matrix delegates interpreter management to uv; pre-install every
-      # supported version so `uv run --python X` finds them.
-      - name: Install Python 3.10-3.14
-        run: uv python install 3.10 3.11 3.12 3.13 3.14
-
       # Dogfood: expand the `test` matrix from pyproject.toml and run
-      # `uv run --python <ver> pytest -q` for 3.10 through 3.14. On Windows
+      # `uv run --python <ver> pytest -q` for 3.10 through 3.14; uv downloads
+      # each missing interpreter on demand. On Windows
       # this includes the win32-only end-to-end quoting tests (skipped on
       # other platforms) that exercise the real uv -> cmd.exe -> python
       # chain without mocks.
