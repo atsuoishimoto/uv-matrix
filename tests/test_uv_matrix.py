@@ -1895,8 +1895,8 @@ def test_spawn_args_posix_passes_list_through():
 @pytest.mark.skipif(sys.platform != "win32", reason="string form is Windows-only")
 def test_spawn_args_windows_keeps_run_string_verbatim():
     # The argv prefix is quoted with list2cmdline rules; the trailing `run`
-    # string is appended raw so uv's own argv parsing — not an extra escaping
-    # layer — consumes its quotes.
+    # string is appended raw so uv's own argv parsing, not an extra escaping
+    # layer, consumes its quotes.
     command = ["uv", "run", "--quiet", "cmd.exe", "/c", 'python probe.py "a b c"']
     assert spawn_args(command) == 'uv run --quiet cmd.exe /c python probe.py "a b c"'
 
