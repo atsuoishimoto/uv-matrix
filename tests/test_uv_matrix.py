@@ -18,7 +18,7 @@ from uv_matrix.config import (
     validate_config_names,
 )
 from uv_matrix.evaluate import EvalError, build_context, eval_expr, render_string, render_template
-from uv_matrix.runner import TaskError, _shell_command, resolve_job
+from uv_matrix.runner import TaskError, _shell_command, resolve_job, spawn_args
 
 
 def test_expand_matrix_cartesian_product():
@@ -1504,3 +1504,70 @@ def test_iter_plan_exclude_invalid_structure():
         ConfigError, match="'exclude' item key 'python-version' is not a valid axis"
     ):
         list(iter_plan(config_invalid_key))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX passthrough branch")
+def test_spawn_args_posix_passes_list_through():
+    # On POSIX execve hands argv to `sh -c` as a real array; nothing re-parses
+    # it, so the command list must be used as-is.
+    command = ["uv", "run", "--quiet", *_shell_command('pytest -k "a b"')]
+    assert spawn_args(command) is command
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="string form is Windows-only")
+def test_spawn_args_windows_keeps_run_string_verbatim():
+    # The argv prefix is quoted with list2cmdline rules; the trailing `run`
+    # string is appended raw so uv's own argv parsing — not an extra escaping
+    # layer — consumes its quotes.
+    command = ["uv", "run", "--quiet", "cmd.exe", "/c", 'python probe.py "a b c"']
+    assert spawn_args(command) == 'uv run --quiet cmd.exe /c python probe.py "a b c"'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises the real cmd.exe quoting chain")
+def test_win32_run_delivers_posargs_intact(tmp_path, monkeypatch):
+    """End-to-end, no mocks: uv-matrix -> uv run -> cmd.exe -> python.
+
+    Guards spawn_args' string form. With a plain argument list,
+    subprocess.list2cmdline escapes the quotes inside the trailing `run`
+    string, uv re-escapes them when spawning cmd.exe, and cmd.exe forwards
+    its /c tail raw — so the probe received `"a b c"` split into three
+    arguments with literal quote characters.
+    """
+    import json
+    import shutil
+
+    from uv_matrix.cli import main
+
+    if shutil.which("uv") is None:
+        pytest.skip("uv executable not on PATH")
+
+    # A virtual project (no build-system table), so `uv run` only creates an
+    # environment and never tries to build or install the project itself.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        "name = 'quoting-probe'\n"
+        "version = '0.1.0'\n"
+        "requires-python = '>=3.10'\n"
+        "dependencies = []\n"
+        "[tool.uv-matrix.matrix.test]\n"
+        "tasks = ['probe']\n"
+        "[tool.uv-matrix.tasks.probe]\n"
+        "run = 'python probe.py {{ posargs }}'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "probe.py").write_text(
+        "import json, sys\n"
+        "with open('argv.json', 'w', encoding='utf-8') as f:\n"
+        "    json.dump(sys.argv[1:], f)\n",
+        encoding="utf-8",
+    )
+    posargs = ["a b c", "-k", "slow and fast", "--name=x y", 'say "hi"', "print('a b')"]
+    monkeypatch.chdir(tmp_path)
+
+    argv_json = tmp_path / "argv.json"
+    # [] covers the sequential spawn path, --max-jobs 2 the parallel one; the
+    # second run reuses the environment the first one created.
+    for flags in ([], ["--max-jobs", "2"]):
+        argv_json.unlink(missing_ok=True)
+        assert main(["run", *flags, "--", *posargs]) == 0
+        assert json.loads(argv_json.read_text(encoding="utf-8")) == posargs

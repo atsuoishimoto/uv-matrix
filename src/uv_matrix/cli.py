@@ -23,7 +23,7 @@ from .config import (
     validate_config_names,
 )
 from .evaluate import EvalError
-from .runner import Job, TaskError, resolve_job
+from .runner import Job, TaskError, resolve_job, spawn_args
 
 # Project-local directory holding the isolated per-job environments, à la tox's
 # `.tox/<envname>`. Keeps each job's environment out of the developer's `.venv`.
@@ -253,7 +253,7 @@ def _run_sequential(
     for job in runnable:
         _print_job_banner(job, style, verbosity)
         env = _job_env(job, root)
-        result = subprocess.run(_job_command(job, verbosity), env=env, cwd=job.cwd)
+        result = subprocess.run(spawn_args(_job_command(job, verbosity)), env=env, cwd=job.cwd)
         if _record_result(job, result.returncode, style, failed):
             break
     return failed
@@ -289,7 +289,7 @@ def _run_parallel(
         env = _job_env(job, root)
         with env_lock(job.env_key):
             return subprocess.run(
-                _job_command(job, verbosity),
+                spawn_args(_job_command(job, verbosity)),
                 env=env,
                 cwd=job.cwd,
                 stdout=subprocess.PIPE,

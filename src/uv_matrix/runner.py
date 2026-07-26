@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +33,34 @@ def _shell_command(run: str) -> list[str]:
         comspec = os.environ.get("COMSPEC", "cmd.exe")
         return [comspec, "/c", run]
     return ["sh", "-c", run]
+
+
+def spawn_args(command: list[str]) -> list[str] | str:
+    """Turn a job command into the argument :func:`subprocess.run` should get.
+
+    On POSIX the list is passed through: execve hands argv to ``sh -c`` as a
+    real array, so the trailing ``run`` string arrives byte-for-byte intact.
+
+    On Windows a list would be joined by ``subprocess.list2cmdline``, which
+    escapes the quotes inside the ``run`` string as ``\\"``. uv parses its own
+    command line back correctly, but re-escapes the string the same way when
+    spawning ``cmd.exe`` — and ``cmd.exe`` forwards its ``/c`` tail to the
+    child *raw*, so those escapes leak into the child's command line and split
+    quoted arguments (``"a b c"`` arrives as ``"a``, ``b``, ``c"``). Passing a
+    single pre-built string instead leaves the ``run`` part unescaped: uv's
+    argv parsing (CommandLineToArgvW rules — the exact inverse of the
+    ``list2cmdline`` used for ``posargs``) consumes its quotes and re-quotes
+    each token cleanly for ``cmd.exe``.
+
+    ``command[-1]`` is the ``run`` string: :func:`resolve_job` appends the
+    :func:`_shell_command` triple last and the CLI splices verbosity flags
+    right after ``uv run``, so the invariant holds for every job command.
+    Only the argv prefix goes through ``list2cmdline``; ``run`` is appended
+    verbatim.
+    """
+    if sys.platform != "win32":
+        return command
+    return f"{subprocess.list2cmdline(command[:-1])} {command[-1]}"
 
 
 class TaskError(Exception):

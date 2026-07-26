@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main]
+    branches: [main, win32-command-quote]
   pull_request:
 
 # Cancel superseded runs on the same ref to save CI minutes.
@@ -31,3 +31,23 @@ jobs:
       # `uv run --python <ver> pytest -q` for 3.10 through 3.14.
       - name: Run test matrix
         run: uv run uv-matrix run --matrix test
+
+  test-windows:
+    name: uv-matrix (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install 3.14
+
+      # Runs the full suite on Windows, including the win32-only end-to-end
+      # quoting tests (skipped on other platforms) that exercise the real
+      # uv -> cmd.exe -> python chain without mocks.
+      - name: Run tests
+        run: uv run pytest -q
