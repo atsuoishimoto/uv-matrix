@@ -123,6 +123,63 @@ def test_validate_config_names_rejects_colliding_axis_aliases():
         validate_config_names(config)
 
 
+def test_validate_config_names_rejects_misspelled_task_fields():
+    # Typos like `group`/`extra`/`env-file` must fail instead of silently
+    # running the job without the intended settings (issue #19).
+    for typo in ("group", "extra", "env-file"):
+        config = {
+            "matrix": {"m": {"x": ["a"], "tasks": ["t"]}},
+            "tasks": {"t": {"run": "pytest", typo: ["dev"]}},
+        }
+        with pytest.raises(ConfigError, match=f"task 't': unknown key '{typo}'"):
+            validate_config_names(config)
+
+
+def test_validate_config_names_rejects_unknown_top_level_keys():
+    # `fail-fast` (removed) and `task` (singular) are leftovers/typos.
+    with pytest.raises(ConfigError, match=r"\[tool.uv-matrix\]: unknown key 'fail-fast'"):
+        validate_config_names({"fail-fast": True, "matrix": {"m": {"tasks": ["t"]}}})
+    with pytest.raises(ConfigError, match="unknown key 'task'"):
+        validate_config_names({"task": {"t": {"run": "pytest"}}})
+
+
+def test_validate_config_names_lists_all_unknown_keys():
+    config = {"tasks": {"t": {"run": "pytest", "group": ["dev"], "extra": ["web"]}}}
+    with pytest.raises(ConfigError, match="unknown keys 'group', 'extra'"):
+        validate_config_names(config)
+
+
+def test_validate_config_names_accepts_all_known_task_fields():
+    config = {
+        "continue-on-error": True,
+        "max-jobs": 2,
+        "env": {"A": "1"},
+        "envfile": ".env",
+        "vars": {"reports": "'.reports'"},
+        "matrix": {"m": {"python-version": ["3.13"], "tasks": ["t"]}},
+        "tasks": {
+            "t": {
+                "run": "pytest",
+                "groups": ["dev"],
+                "extras": ["web"],
+                "uv-args": ["--no-default-groups"],
+                "env": {"B": "2"},
+                "envfile": ".env",
+                "cwd": "sub",
+                "when": "True",
+                "python-version": "3.13",
+                "continue-on-error": False,
+            }
+        },
+    }
+    validate_config_names(config)  # does not raise
+
+
+def test_validate_config_names_rejects_non_table_task_def():
+    with pytest.raises(ConfigError, match="task 't' must be a table"):
+        validate_config_names({"tasks": {"t": "pytest"}})
+
+
 def test_matrix_axes_strips_tasks_and_validates():
     assert matrix_axes({"python": ["3.13"], "tasks": ["t"]}) == {"python": ["3.13"]}
     with pytest.raises(ConfigError):
@@ -852,6 +909,38 @@ def test_main_run_unknown_task_errors(tmp_path, monkeypatch, capsys):
     assert "unknown task" in capsys.readouterr().err
 
 
+def test_main_list_unknown_task_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    # `list` validates the task name the same way `run --task` does (issue #21),
+    # so a typo errors instead of printing nothing with exit 0.
+    assert main(["list", "nope"]) == 1
+    assert "unknown task" in capsys.readouterr().err
+
+
+def test_main_list_unknown_matrix_errors(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["list", "--matrix", "nope"]) == 1
+    assert "unknown matrix" in capsys.readouterr().err
+
+
+def test_main_list_matrix_option_selects(tmp_path, monkeypatch, capsys):
+    from uv_matrix.cli import main
+
+    _write_multi_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    assert main(["list", "--matrix", "checks"]) == 0
+    out = capsys.readouterr().out
+    assert "checks:lint" in out
+    assert "checks:test" in out
+    assert "test:test" not in out
+
+
 def test_main_filter_unknown_key_errors(tmp_path, monkeypatch, capsys):
     from uv_matrix.cli import main
 
@@ -891,7 +980,7 @@ def test_list_does_not_evaluate(capsys):
         # `when` and the template would raise if list evaluated them:
         "tasks": {"t": {"python-version": "{{ matrix['MISSING'] }}", "run": "x", "when": "1 / 0"}},
     }
-    rc = _cmd_list(config, argparse.Namespace(task=None, filter=None), Path("."))
+    rc = _cmd_list(config, argparse.Namespace(task=None, matrix=None, filter=None), Path("."))
     assert rc == 0
     assert "m:t python=3.11" in capsys.readouterr().out
 
