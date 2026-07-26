@@ -2,7 +2,7 @@ name: test
 
 on:
   push:
-    branches: [main, win32-command-quote]
+    branches: [main]
   pull_request:
 
 # Cancel superseded runs on the same ref to save CI minutes.

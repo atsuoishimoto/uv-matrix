@@ -985,12 +985,12 @@ def test_resolve_job_continue_on_error_global_default_and_override():
 
 
 def _spawned_argv(command):
-    """Normalize what the CLI handed to ``subprocess.run`` back to an argv list.
+    """Normalize what the CLI handed to subprocess.run back to an argv list.
 
-    On Windows ``spawn_args`` passes a single command-line string (so the
-    ``run`` string reaches ``cmd.exe`` without an extra escaping layer). The
-    stubs here only inspect simple space-free tokens, so a plain split is
-    enough to recover them.
+    On Windows spawn_args passes a single command-line string (so the run
+    string reaches cmd.exe without an extra escaping layer). The stubs here
+    only inspect simple space-free tokens, so a plain split is enough to
+    recover them.
     """
     return command if isinstance(command, list) else command.split()
 
@@ -1216,12 +1216,11 @@ def _banner_run(tmp_path, monkeypatch, capsys, argv):
 
 
 def _banner_command_line():
-    """The banner's `  + <command>` line for `_write_project`'s single task.
+    """The banner's "  + <command>" line for _write_project's single task.
 
-    The banner prints ``job.command_str`` — the shlex-quoted command — whose
-    shell tail is platform-dependent (``sh -c`` on POSIX, ``%COMSPEC% /c`` on
-    Windows), so the expectation is built from ``_shell_command`` rather than
-    hard-coded.
+    The banner prints job.command_str, the shlex-quoted command, whose shell
+    tail is platform-dependent ("sh -c" on POSIX, "%COMSPEC% /c" on Windows),
+    so the expectation is built from _shell_command rather than hard-coded.
     """
     import shlex
 
@@ -1553,10 +1552,10 @@ def test_spawn_args_windows_keeps_run_string_verbatim():
 def test_win32_run_delivers_posargs_intact(tmp_path, monkeypatch):
     """End-to-end, no mocks: uv-matrix -> uv run -> cmd.exe -> python.
 
-    Guards spawn_args' string form. With a plain argument list,
-    subprocess.list2cmdline escapes the quotes inside the trailing `run`
+    Guards the string form built by spawn_args. With a plain argument list,
+    subprocess.list2cmdline escapes the quotes inside the trailing run
     string, uv re-escapes them when spawning cmd.exe, and cmd.exe forwards
-    its /c tail raw — so the probe received `"a b c"` split into three
+    its /c tail raw -- so the probe received "a b c" split into three
     arguments with literal quote characters.
     """
     import json
