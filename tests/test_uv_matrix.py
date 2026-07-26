@@ -1686,7 +1686,8 @@ def test_run_parallel_stop_closes_cancel_race(monkeypatch):
     ran = []
 
     def fake_run(cmd, env=None, cwd=None, **kwargs):
-        version = cmd[cmd.index("--python") + 1]
+        argv = _spawned_argv(cmd)
+        version = argv[argv.index("--python") + 1]
         ran.append(version)
         if version == "fail":
             return subprocess.CompletedProcess(cmd, 1, stdout="")
