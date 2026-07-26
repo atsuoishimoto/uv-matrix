@@ -8,6 +8,7 @@ import os
 import queue
 import subprocess
 import sys
+import threading
 from collections.abc import Iterator
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -241,16 +242,24 @@ def _record_result(
     returncode: int,
     style: _Style,
     failed: list[tuple[Job, int]],
+    *,
+    stopping: bool = False,
 ) -> bool:
     """Record a finished job's exit code; return True when the run should stop.
 
     A non-zero exit is always a failure and always counts toward the final exit
     code. When the failing job's ``continue-on-error`` is true the run goes on to
-    the remaining jobs; otherwise the run stops after this failure.
+    the remaining jobs; otherwise the run stops after this failure. With
+    ``stopping`` true a stop is already in progress — the job merely finished
+    late — so the line carries no "(stopping)"/"(continuing)" suffix and no new
+    stop is requested.
     """
     if returncode == 0:
         return False
     failed.append((job, returncode))
+    if stopping:
+        print(style("red", f"  -> failed: exit {returncode}"))
+        return False
     if job.continue_on_error:
         print(style("red", f"  -> failed: exit {returncode} (continuing)"))
         return False
@@ -260,16 +269,20 @@ def _record_result(
 
 def _run_sequential(
     runnable: list[Job], root: Path, style: _Style, verbosity: int
-) -> list[tuple[Job, int]]:
-    """Run jobs one at a time, inheriting stdio so output streams live (no capture)."""
+) -> tuple[list[tuple[Job, int]], int]:
+    """Run jobs one at a time, inheriting stdio so output streams live (no capture).
+
+    Returns the failed jobs plus how many jobs were cancelled — never started
+    because a failure stopped the run.
+    """
     failed: list[tuple[Job, int]] = []
-    for job in runnable:
+    for index, job in enumerate(runnable):
         _print_job_banner(job, style, verbosity)
         env = _job_env(job, root)
         result = subprocess.run(_job_command(job, verbosity), env=env, cwd=job.cwd)
         if _record_result(job, result.returncode, style, failed):
-            break
-    return failed
+            return failed, len(runnable) - index - 1
+    return failed, 0
 
 
 def _run_parallel(
@@ -278,7 +291,7 @@ def _run_parallel(
     parallel: int,
     style: _Style,
     verbosity: int,
-) -> list[tuple[Job, int]]:
+) -> tuple[list[tuple[Job, int]], int]:
     """Run up to ``parallel`` jobs at once, capturing each job's output.
 
     Output is captured per job (stderr folded into stdout) and printed as a
@@ -291,7 +304,7 @@ def _run_parallel(
 
     A failing job whose ``continue-on-error`` is false cancels jobs that have not
     started yet; jobs already running are allowed to finish and their output is
-    still reported.
+    still reported. Returns the failed jobs plus how many jobs were cancelled.
     """
     # Slots are borrowed for the duration of a job and returned when it exits.
     # The pool has exactly `parallel` workers, so a slot is always available.
@@ -299,7 +312,18 @@ def _run_parallel(
     for slot in range(parallel):
         slots.put(slot)
 
-    def run_one(job: Job) -> tuple[subprocess.CompletedProcess[str], int]:
+    # `future.cancel()` alone leaves a window: a worker grabs the next queued
+    # job the instant its current one finishes, before the main thread has
+    # processed the failure and cancelled the pending futures. The stop is
+    # therefore decided in the worker itself — a failure whose job doesn't
+    # continue-on-error sets this event before the worker can pick up another
+    # job — and checked at the top of `run_one`, so a job that slipped past
+    # cancel() bails out (returning None) instead of launching.
+    stop = threading.Event()
+
+    def run_one(job: Job) -> tuple[subprocess.CompletedProcess[str], int] | None:
+        if stop.is_set():
+            return None
         slot = slots.get()
         try:
             result = subprocess.run(
@@ -312,25 +336,36 @@ def _run_parallel(
             )
         finally:
             slots.put(slot)
+        if result.returncode != 0 and not job.continue_on_error:
+            stop.set()
         return result, slot
 
     failed: list[tuple[Job, int]] = []
+    cancelled = 0
     stopping = False
     with concurrent.futures.ThreadPoolExecutor(max_workers=parallel) as executor:
         futures = {executor.submit(run_one, job): job for job in runnable}
         for future in concurrent.futures.as_completed(futures):
             job = futures[future]
             try:
-                result, slot = future.result()
+                outcome = future.result()
             except concurrent.futures.CancelledError:
+                cancelled += 1
                 continue
+            if outcome is None:
+                cancelled += 1
+                continue
+            result, slot = outcome
             _print_job_banner(job, style, verbosity, slot=slot)
             _emit_output(result.stdout)
-            if _record_result(job, result.returncode, style, failed) and not stopping:
+            # `stopping` (not the event) drives the message: the worker has
+            # already set `stop` for this very failure, but only the first
+            # failure processed here should read "(stopping)".
+            if _record_result(job, result.returncode, style, failed, stopping=stopping):
                 stopping = True
                 for pending in futures:
                     pending.cancel()
-    return failed
+    return failed, cancelled
 
 
 def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> int:
@@ -362,13 +397,14 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
             print(style("dim", f"-- skipped (when): {label}"))
 
     failed: list[tuple[Job, int]] = []
+    cancelled = 0
     if args.dry_run:
         for job in runnable:
             _print_job_banner(job, style, verbosity, show_command=True)
     elif parallel > 1:
-        failed = _run_parallel(runnable, root, parallel, style, verbosity)
+        failed, cancelled = _run_parallel(runnable, root, parallel, style, verbosity)
     else:
-        failed = _run_sequential(runnable, root, style, verbosity)
+        failed, cancelled = _run_sequential(runnable, root, style, verbosity)
 
     if verbosity >= 0:
         print()
@@ -377,6 +413,11 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
             # exclusion is never invisible (issue #7); the per-job lines above stay -v-only.
             noun = "job" if len(skipped) == 1 else "jobs"
             print(style("dim", f"{len(skipped)} {noun} skipped (when)"))
+        if cancelled:
+            # Jobs that never ran because a failure stopped the run; without this
+            # the summary reads as if the run covered everything (issue #23).
+            noun = "job" if cancelled == 1 else "jobs"
+            print(style("dim", f"{cancelled} {noun} cancelled"))
     if failed:
         print(style("red", "Failed jobs:"))
         for job, code in failed:
