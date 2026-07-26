@@ -1827,3 +1827,26 @@ def test_iter_plan_exclude_invalid_structure():
         ConfigError, match="'exclude' item key 'python-version' is not a valid axis"
     ):
         list(iter_plan(config_invalid_key))
+
+
+def test_iter_plan_exclude_unknown_value():
+    # A value that matches no axis value is an error, not a silent no-op.
+    config = {
+        "matrix": {"m": {"x": ["a", "b"], "tasks": ["t"], "exclude": [{"x": "c"}]}}
+    }
+    with pytest.raises(
+        ConfigError, match=r"'exclude' value 'c' for axis 'x' matches no axis value"
+    ):
+        list(iter_plan(config))
+
+
+def test_iter_plan_exclude_value_type_mismatch():
+    # Comparison is raw: the string "1" can never match an int axis value, so
+    # the rule is rejected instead of silently excluding nothing.
+    config = {
+        "matrix": {"m": {"nums": [1, 2], "tasks": ["t"], "exclude": [{"nums": "1"}]}}
+    }
+    with pytest.raises(
+        ConfigError, match=r"'exclude' value '1' for axis 'nums' matches no axis value"
+    ):
+        list(iter_plan(config))
