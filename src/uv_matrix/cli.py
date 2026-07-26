@@ -82,18 +82,6 @@ def _cell_matches(cell: dict[str, Any], filters: dict[str, set[str]]) -> bool:
 
 
 def _selected(
-    config: dict[str, Any], task_filter: str | None, filters: dict[str, set[str]]
-) -> Iterator[tuple[str, dict[str, Any], str]]:
-    """Yield ``(matrix_name, cell, task_name)`` passing the task and cell filters."""
-    for matrix_name, cell, task_name in iter_plan(config):
-        if task_filter is not None and task_name != task_filter:
-            continue
-        if not _cell_matches(cell, filters):
-            continue
-        yield matrix_name, cell, task_name
-
-
-def _selected_for_run(
     config: dict[str, Any],
     matrix_filter: str | None,
     task_filter: str | None,
@@ -104,7 +92,8 @@ def _selected_for_run(
     ``--matrix`` and ``--task`` are matched by exact name; ``--filter`` matches
     against the cell's axis values. An unknown matrix or task name is an error
     (rather than a silent empty selection) so a typo is caught instead of quietly
-    running nothing.
+    selecting nothing. Shared by ``run`` and ``list`` so both validate the same
+    way (issue #21).
     """
     plan = list(iter_plan(config))
     if matrix_filter is not None:
@@ -155,7 +144,7 @@ def _cmd_list(config: dict[str, Any], args: argparse.Namespace, root: Path) -> i
     """
     style = _Style(_use_color(args))
     filters = parse_filters(config, args.filter or [])
-    for matrix_name, cell, task_name in _selected(config, args.task, filters):
+    for matrix_name, cell, task_name in _selected(config, args.matrix, args.task, filters):
         print(style("cyan", _label(matrix_name, cell, task_name)))
     return 0
 
@@ -341,7 +330,7 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
     posargs = getattr(args, "posargs", [])
     filters = parse_filters(config, args.filter or [])
     skipped: list[str] = []
-    for matrix_name, cell, task_name in _selected_for_run(config, args.matrix, args.task, filters):
+    for matrix_name, cell, task_name in _selected(config, args.matrix, args.task, filters):
         job = resolve_job(config, matrix_name, cell, task_name, task_defs, posargs)
         if job is not None:
             runnable.append(job)
@@ -457,6 +446,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "list", parents=[common], help="list selectable jobs without evaluating or running them"
     )
     list_p.add_argument("task", nargs="?", help="show only this task")
+    list_p.add_argument(
+        "-m", "--matrix", metavar="NAME", help="show only the matrix with this name"
+    )
     list_p.add_argument("-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP)
     list_p.set_defaults(func=_cmd_list)
 
