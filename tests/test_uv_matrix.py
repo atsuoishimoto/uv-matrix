@@ -1329,6 +1329,81 @@ def test_run_parallel_runs_all_and_captures(monkeypatch, capsys):
     assert capsys.readouterr().out.count("hello") == 3
 
 
+def test_env_dir_name_slots():
+    from uv_matrix import cli
+
+    # Slot 0 keeps the bare key (shared with sequential runs and existing
+    # directories); higher slots get a suffix.
+    assert cli._env_dir_name("py3.12-abcd1234", 0) == "py3.12-abcd1234"
+    assert cli._env_dir_name("py3.12-abcd1234", 1) == "py3.12-abcd1234-1"
+    assert cli._env_dir_name("py3.12-abcd1234", 3) == "py3.12-abcd1234-3"
+
+
+def test_job_env_uses_slot_directory():
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    job = _simple_job()
+    root = Path("/proj")
+    assert cli._job_env(job, root)["UV_PROJECT_ENVIRONMENT"] == str(
+        root / cli.ENV_DIR / job.env_key
+    )
+    assert cli._job_env(job, root, slot=2)["UV_PROJECT_ENVIRONMENT"] == str(
+        root / cli.ENV_DIR / f"{job.env_key}-2"
+    )
+
+
+def test_run_parallel_same_env_key_runs_concurrently_in_distinct_dirs(monkeypatch):
+    # Jobs sharing an env_key are no longer serialized: each concurrent job
+    # borrows its own slot, so they overlap in time and never share a directory.
+    import subprocess
+    import threading
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    both_running = threading.Barrier(2, timeout=10)
+    env_dirs = []
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        env_dirs.append(env["UV_PROJECT_ENVIRONMENT"])
+        # Blocks until both jobs are inside subprocess.run at once — this would
+        # deadlock (and time out) under the old per-env_key lock.
+        both_running.wait()
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job(), _simple_job()]
+    assert jobs[0].env_key == jobs[1].env_key
+    failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    assert failed == []
+    assert len(set(env_dirs)) == 2
+
+
+def test_run_parallel_slots_are_bounded_and_reused(monkeypatch):
+    # With parallel=2, every job lands on slot 0 or slot 1 regardless of how
+    # many jobs run in total.
+    import subprocess
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    env_dirs = set()
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        env_dirs.add(env["UV_PROJECT_ENVIRONMENT"])
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job() for _ in range(6)]
+    failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    assert failed == []
+    key = jobs[0].env_key
+    expected = {str(Path(".") / cli.ENV_DIR / name) for name in (key, f"{key}-1")}
+    assert env_dirs <= expected
+
+
 def test_run_parallel_continue_on_error_collects_all_failures(monkeypatch):
     # continue-on-error jobs do not stop the run, so every failure is collected.
     import subprocess
