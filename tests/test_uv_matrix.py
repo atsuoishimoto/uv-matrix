@@ -123,6 +123,63 @@ def test_validate_config_names_rejects_colliding_axis_aliases():
         validate_config_names(config)
 
 
+def test_validate_config_names_rejects_misspelled_task_fields():
+    # Typos like `group`/`extra`/`env-file` must fail instead of silently
+    # running the job without the intended settings (issue #19).
+    for typo in ("group", "extra", "env-file"):
+        config = {
+            "matrix": {"m": {"x": ["a"], "tasks": ["t"]}},
+            "tasks": {"t": {"run": "pytest", typo: ["dev"]}},
+        }
+        with pytest.raises(ConfigError, match=f"task 't': unknown key '{typo}'"):
+            validate_config_names(config)
+
+
+def test_validate_config_names_rejects_unknown_top_level_keys():
+    # `fail-fast` (removed) and `task` (singular) are leftovers/typos.
+    with pytest.raises(ConfigError, match=r"\[tool.uv-matrix\]: unknown key 'fail-fast'"):
+        validate_config_names({"fail-fast": True, "matrix": {"m": {"tasks": ["t"]}}})
+    with pytest.raises(ConfigError, match="unknown key 'task'"):
+        validate_config_names({"task": {"t": {"run": "pytest"}}})
+
+
+def test_validate_config_names_lists_all_unknown_keys():
+    config = {"tasks": {"t": {"run": "pytest", "group": ["dev"], "extra": ["web"]}}}
+    with pytest.raises(ConfigError, match="unknown keys 'group', 'extra'"):
+        validate_config_names(config)
+
+
+def test_validate_config_names_accepts_all_known_task_fields():
+    config = {
+        "continue-on-error": True,
+        "max-jobs": 2,
+        "env": {"A": "1"},
+        "envfile": ".env",
+        "vars": {"reports": "'.reports'"},
+        "matrix": {"m": {"python-version": ["3.13"], "tasks": ["t"]}},
+        "tasks": {
+            "t": {
+                "run": "pytest",
+                "groups": ["dev"],
+                "extras": ["web"],
+                "uv-args": ["--no-default-groups"],
+                "env": {"B": "2"},
+                "envfile": ".env",
+                "cwd": "sub",
+                "when": "True",
+                "python-version": "3.13",
+                "continue-on-error": False,
+            }
+        },
+    }
+    validate_config_names(config)  # does not raise
+
+
+def test_validate_config_names_rejects_non_table_task_def():
+    with pytest.raises(ConfigError, match="task 't' must be a table"):
+        validate_config_names({"tasks": {"t": "pytest"}})
+
+
 def test_matrix_axes_strips_tasks_and_validates():
     assert matrix_axes({"python": ["3.13"], "tasks": ["t"]}) == {"python": ["3.13"]}
     with pytest.raises(ConfigError):
