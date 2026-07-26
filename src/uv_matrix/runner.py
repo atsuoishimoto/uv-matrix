@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
-import re
 import shlex
 import sys
 from dataclasses import dataclass
@@ -15,8 +13,6 @@ from dotenv import dotenv_values
 
 from .config import CONFIG_TABLE
 from .evaluate import build_context, eval_expr, render_string, render_template
-
-_UNSAFE = re.compile(r"[^A-Za-z0-9.+_-]")
 
 
 def _shell_command(run: str) -> list[str]:
@@ -51,7 +47,6 @@ class Job:
     env: dict[str, str]
     cwd: str | None
     continue_on_error: bool
-    env_key: str
 
     @property
     def label(self) -> str:
@@ -88,22 +83,6 @@ def _rendered_list(
         if text:
             result.append(text)
     return result
-
-
-def _env_key(
-    python_version: str | None, groups: list[str], extras: list[str], uv_args: list[str]
-) -> str:
-    """Stable directory name for the isolated environment of this job.
-
-    Keyed by everything that determines the environment's contents, so jobs that
-    resolve to the same environment share one directory and different ones never
-    collide. The Python version is kept readable; the rest goes into a hash.
-    When no version is pinned, ``default`` stands in for uv's chosen interpreter.
-    """
-    raw = repr((python_version, groups, extras, uv_args))
-    digest = hashlib.sha256(raw.encode()).hexdigest()[:8]
-    label = _UNSAFE.sub("_", f"py{python_version or 'default'}")
-    return f"{label}-{digest}"
 
 
 def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
@@ -243,5 +222,4 @@ def resolve_job(
         env=env,
         cwd=cwd,
         continue_on_error=continue_on_error,
-        env_key=_env_key(python_version, groups, extras, uv_args),
     )

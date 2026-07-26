@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import os
+import queue
 import subprocess
 import sys
-import threading
 from collections.abc import Iterator
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
@@ -127,10 +127,22 @@ def _selected_for_run(
         yield matrix_name, cell, task_name
 
 
-def _job_env(job: Job, root: Path) -> dict[str, str]:
+def _slot_dir(slot: int) -> str:
+    """Directory name for the environment of a parallel slot.
+
+    There is exactly one environment directory per slot (sequential runs use
+    slot 0), so at most ``max-jobs`` directories ever exist. Giving each
+    concurrent slot its own directory is what makes locking unnecessary: two
+    jobs can only sync the same directory when they run one after the other,
+    and uv's implicit sync reconciles it to each job's requested contents.
+    """
+    return f"slot-{slot}"
+
+
+def _job_env(job: Job, root: Path, slot: int = 0) -> dict[str, str]:
     """Subprocess environment, with per-job isolation layered under task env."""
     env = {**os.environ}
-    env["UV_PROJECT_ENVIRONMENT"] = str(root / ENV_DIR / job.env_key)
+    env["UV_PROJECT_ENVIRONMENT"] = str(root / ENV_DIR / _slot_dir(slot))
     env.update(job.env)  # an explicit task `env` always wins
     return env
 
@@ -188,7 +200,7 @@ def _job_command(job: Job, verbosity: int) -> list[str]:
 
 
 def _print_job_banner(
-    job: Job, style: _Style, verbosity: int, *, show_command: bool = False
+    job: Job, style: _Style, verbosity: int, *, show_command: bool = False, slot: int = 0
 ) -> None:
     """Print the per-job banner, gating each line by verbosity.
 
@@ -198,7 +210,8 @@ def _print_job_banner(
     * ``  + <command>`` — the ``uv run`` command as written (uv's own
       ``--quiet``/``-v`` flags are omitted); shown at ``-v``, and always under
       ``--dry-run``, whose purpose is to preview commands.
-    * ``  env: <dir>`` — the job's isolated environment directory; shown at ``-vv``.
+    * ``  env: <dir>`` — the job's isolated environment directory (for the
+      parallel ``slot`` it ran on); shown at ``-vv``.
 
     A net ``-q`` (verbosity below zero) suppresses the banner entirely.
     """
@@ -208,7 +221,7 @@ def _print_job_banner(
     if show_command or verbosity >= 1:
         print(style("dim", f"  + {job.command_str}"))
     if verbosity >= 2:
-        print(style("dim", f"  env: {ENV_DIR}/{job.env_key}"))
+        print(style("dim", f"  env: {ENV_DIR}/{_slot_dir(slot)}"))
 
 
 def _emit_output(output: str | None) -> None:
@@ -270,32 +283,36 @@ def _run_parallel(
 
     Output is captured per job (stderr folded into stdout) and printed as a
     single block after the job finishes, so concurrent jobs never interleave and
-    each block is identifiable by its banner. Jobs sharing an environment key are
-    serialized via a per-key lock so their ``uv sync`` calls do not race on the
-    same directory.
+    each block is identifiable by its banner. Each of the ``parallel`` slots uses
+    its own environment directory (``slot-<n>``), so two concurrent jobs never
+    sync the same directory and every job runs fully in parallel — no locking
+    needed. uv's hardlink-based cache keeps re-syncing a slot to a different
+    environment cheap.
 
     A failing job whose ``continue-on-error`` is false cancels jobs that have not
     started yet; jobs already running are allowed to finish and their output is
     still reported.
     """
-    env_locks: dict[str, threading.Lock] = {}
-    locks_guard = threading.Lock()
+    # Slots are borrowed for the duration of a job and returned when it exits.
+    # The pool has exactly `parallel` workers, so a slot is always available.
+    slots: queue.SimpleQueue[int] = queue.SimpleQueue()
+    for slot in range(parallel):
+        slots.put(slot)
 
-    def env_lock(key: str) -> threading.Lock:
-        with locks_guard:
-            return env_locks.setdefault(key, threading.Lock())
-
-    def run_one(job: Job) -> subprocess.CompletedProcess[str]:
-        env = _job_env(job, root)
-        with env_lock(job.env_key):
-            return subprocess.run(
+    def run_one(job: Job) -> tuple[subprocess.CompletedProcess[str], int]:
+        slot = slots.get()
+        try:
+            result = subprocess.run(
                 _job_command(job, verbosity),
-                env=env,
+                env=_job_env(job, root, slot),
                 cwd=job.cwd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
             )
+        finally:
+            slots.put(slot)
+        return result, slot
 
     failed: list[tuple[Job, int]] = []
     stopping = False
@@ -304,10 +321,10 @@ def _run_parallel(
         for future in concurrent.futures.as_completed(futures):
             job = futures[future]
             try:
-                result = future.result()
+                result, slot = future.result()
             except concurrent.futures.CancelledError:
                 continue
-            _print_job_banner(job, style, verbosity)
+            _print_job_banner(job, style, verbosity, slot=slot)
             _emit_output(result.stdout)
             if _record_result(job, result.returncode, style, failed) and not stopping:
                 stopping = True

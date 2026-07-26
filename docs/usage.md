@@ -42,7 +42,7 @@ command line, and `-vv` adds the job's isolated environment directory:
 ```text
 ==> test:test python-version=3.11
   + uv run --python 3.11 sh -c pytest
-  env: .uv-matrix/py3.11-1a2b3c4d
+  env: .uv-matrix/slot-0
 ```
 
 A job whose `when` expression is false is skipped rather than silently dropped.
@@ -120,13 +120,15 @@ the same `==> matrix:task …` banner used in sequential mode. Each block is
 therefore attributable to exactly one job. Sequential mode never captures —
 output is inherited and streams live.
 
-### Shared environments are serialized
+### Per-slot environments
 
-Jobs that resolve to the same isolated environment (same `env_key` — identical
-Python version, `groups`, `extras`, and `uv-args`) are run one at a time even
-under `--max-jobs`, so their `uv sync` calls do not race on the same
-`.uv-matrix/<key>/` directory. Jobs with different environments run fully
-concurrently.
+Each of the `N` parallel slots uses its own environment directory
+(`.uv-matrix/slot-<n>/`; a sequential run uses `slot-0`). Two concurrent jobs
+therefore never sync the same directory, so all jobs — including ones with
+identical environments — run fully in parallel. At most `N` directories ever
+exist; when consecutive jobs on a slot need different environments, uv's
+implicit sync reconciles the directory, which its hardlink-based cache keeps
+cheap.
 
 ### Stopping in parallel mode
 
@@ -210,12 +212,16 @@ environment.
 
 ## Environments
 
-Each job runs in its own isolated environment under `.uv-matrix/<key>/`
+Each job runs in an isolated environment under `.uv-matrix/slot-<n>/`
 (analogous to tox's `.tox/<envname>/`), selected via the
 `UV_PROJECT_ENVIRONMENT` variable. This keeps your project's `.venv` untouched
-and stops one job's `groups`/`extras` from leaking into another. The directory
-name is keyed by everything that determines the environment (Python version,
-`groups`, `extras`, `uv-args`), so identical environments are reused across runs
-and different ones never collide. Add `.uv-matrix/` to your `.gitignore`.
+and stops one job's `groups`/`extras` from leaking into another: before each
+job, uv's implicit sync reconciles the slot's directory to exactly what that
+job requests (Python version, `groups`, `extras`, `uv-args`). There is one
+directory per parallel slot — a sequential run uses only `slot-0` — so the
+number of directories is bounded by `max-jobs`. When the next job on a slot
+requests the same environment the sync is a fast no-op; when it differs, uv
+rebuilds the environment from its hardlink-based cache. Add `.uv-matrix/` to
+your `.gitignore`.
 
 A task's own `env` value for `UV_PROJECT_ENVIRONMENT` overrides the default.
