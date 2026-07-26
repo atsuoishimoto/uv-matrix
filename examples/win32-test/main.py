@@ -1,5 +1,6 @@
+import sys
 def main():
-    print("Hello from win32-test!")
+    print(sys.argv)
 
 
 if __name__ == "__main__":

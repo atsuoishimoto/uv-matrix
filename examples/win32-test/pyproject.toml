@@ -10,4 +10,4 @@ dependencies = []
 tasks = ["run-python-c"]
 
 [tool.uv-matrix.tasks.run-python-c]
-run = "python -c {{ posargs }}"
+run = "python main.py {{ posargs }}"
