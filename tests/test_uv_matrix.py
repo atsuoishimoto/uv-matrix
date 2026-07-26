@@ -1377,8 +1377,11 @@ def test_run_sequential_inherits_stdio(monkeypatch):
         return subprocess.CompletedProcess(cmd, 0)
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    failed = cli._run_sequential([_simple_job()], Path("."), style=cli._Style(False), verbosity=0)
+    failed, cancelled = cli._run_sequential(
+        [_simple_job()], Path("."), style=cli._Style(False), verbosity=0
+    )
     assert failed == []
+    assert cancelled == 0
     # No stdout/stderr capture kwargs were passed.
     assert seen == [{}]
 
@@ -1397,8 +1400,11 @@ def test_run_parallel_runs_all_and_captures(monkeypatch, capsys):
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     jobs = [_simple_job(python_version=v) for v in ("3.11", "3.12", "3.13")]
-    failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    failed, cancelled = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
     assert failed == []
+    assert cancelled == 0
     assert len(seen) == 3
     # Output is captured (stderr folded into stdout) rather than inherited.
     assert all(kw.get("stdout") is subprocess.PIPE for kw in seen)
@@ -1450,7 +1456,9 @@ def test_run_parallel_jobs_run_concurrently_in_distinct_dirs(monkeypatch):
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     jobs = [_simple_job(), _simple_job()]
-    failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    failed, _ = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
     assert failed == []
     assert len(set(env_dirs)) == 2
 
@@ -1471,7 +1479,9 @@ def test_run_parallel_slots_are_bounded_and_reused(monkeypatch):
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     jobs = [_simple_job() for _ in range(6)]
-    failed = cli._run_parallel(jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    failed, _ = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
     assert failed == []
     expected = {str(Path(".") / cli.ENV_DIR / name) for name in ("slot-0", "slot-1")}
     assert env_dirs <= expected
@@ -1491,8 +1501,11 @@ def test_run_parallel_continue_on_error_collects_all_failures(monkeypatch):
     jobs = [
         _simple_job(python_version=v, continue_on_error=True) for v in ("3.11", "3.12", "3.13")
     ]
-    failed = cli._run_parallel(jobs, Path("."), parallel=3, style=cli._Style(False), verbosity=0)
+    failed, cancelled = cli._run_parallel(
+        jobs, Path("."), parallel=3, style=cli._Style(False), verbosity=0
+    )
     assert len(failed) == 3
+    assert cancelled == 0
     assert all(code == 2 for _, code in failed)
 
 
@@ -1510,8 +1523,108 @@ def test_run_parallel_continue_on_error_still_counts_as_failure(monkeypatch):
         return subprocess.CompletedProcess(cmd, 1, stdout="")
 
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    failed = cli._run_parallel([job], Path("."), parallel=2, style=cli._Style(False), verbosity=0)
+    failed, _ = cli._run_parallel(
+        [job], Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
     assert len(failed) == 1
+
+
+def test_record_result_late_failure_during_stop(capsys):
+    # A job that fails after a stop is already in progress is a plain failure:
+    # no repeated "(stopping)" suffix, and no new stop request (issue #23).
+    from uv_matrix import cli
+
+    failed = []
+    job = _simple_job()
+    should_stop = cli._record_result(job, 1, cli._Style(False), failed, stopping=True)
+    assert should_stop is False
+    assert failed == [(job, 1)]
+    out = capsys.readouterr().out
+    assert "failed: exit 1" in out
+    assert "(stopping)" not in out
+    assert "(continuing)" not in out
+
+
+def test_run_sequential_stop_counts_remaining_as_cancelled(monkeypatch):
+    import subprocess
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job(python_version=v) for v in ("3.11", "3.12", "3.13")]
+    failed, cancelled = cli._run_sequential(jobs, Path("."), style=cli._Style(False), verbosity=0)
+    assert len(failed) == 1
+    assert cancelled == 2
+
+
+def test_run_parallel_stop_closes_cancel_race(monkeypatch):
+    # A worker grabs the next queued job the instant its current one finishes —
+    # possibly before the main thread has processed the failure and called
+    # future.cancel(). The stop event makes such a job bail out instead of
+    # launching (issue #23). Setup: the two "park" jobs hold both workers until
+    # the stop event is set, so the tail job can only be picked up after the
+    # stop is visible — it must never launch, and every job is accounted for.
+    import subprocess
+    import threading
+    from pathlib import Path
+
+    from uv_matrix import cli
+
+    events = []
+    real_event = threading.Event
+
+    def spy_event():
+        event = real_event()
+        events.append(event)
+        return event
+
+    monkeypatch.setattr(cli.threading, "Event", spy_event)
+
+    ran = []
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        version = cmd[cmd.index("--python") + 1]
+        ran.append(version)
+        if version == "fail":
+            return subprocess.CompletedProcess(cmd, 1, stdout="")
+        # Keep this worker busy until the stop is in effect.
+        assert events[0].wait(timeout=10)
+        return subprocess.CompletedProcess(cmd, 0, stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    jobs = [_simple_job(python_version=v) for v in ("fail", "park-1", "park-2", "tail")]
+    failed, cancelled = cli._run_parallel(
+        jobs, Path("."), parallel=2, style=cli._Style(False), verbosity=0
+    )
+    assert [(job.label, code) for job, code in failed] == [(jobs[0].label, 1)]
+    # The tail job never launched, and no job silently vanished: everything is
+    # either run or counted as cancelled.
+    assert "tail" not in ran
+    assert cancelled >= 1
+    assert len(ran) + cancelled == len(jobs)
+
+
+def test_main_run_summary_counts_cancelled_jobs(tmp_path, monkeypatch, capsys):
+    import subprocess
+
+    from uv_matrix import cli
+    from uv_matrix.cli import main
+
+    _write_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(cmd, env=None, cwd=None, **kwargs):
+        return subprocess.CompletedProcess(cmd, 1)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    assert main(["run"]) == 1
+    out = capsys.readouterr().out
+    assert "1 job cancelled" in out
+    assert "Failed jobs:" in out
 
 
 def test_main_run_parallel_executes(tmp_path, monkeypatch, capsys):
