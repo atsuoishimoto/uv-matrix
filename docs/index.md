@@ -12,7 +12,7 @@ Status: early development
 
 Many Python projects need to run checks like this:
 
-- run tests on Python 3.12 and 3.13
+- run tests against multiple Python versions
 - run tests with different optional dependencies
 - run lint, docs, and test tasks from one project configuration
 - pass the same matrix setup to local development and CI
