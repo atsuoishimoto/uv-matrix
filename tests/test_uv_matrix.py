@@ -1,6 +1,7 @@
 """Tests for the uv-matrix MVP: matrix expansion, evaluation, job resolution."""
 
 import os
+import sys
 
 import pytest
 
@@ -17,7 +18,7 @@ from uv_matrix.config import (
     validate_config_names,
 )
 from uv_matrix.evaluate import EvalError, build_context, eval_expr, render_string, render_template
-from uv_matrix.runner import TaskError, _shell_command, resolve_job
+from uv_matrix.runner import TaskError, _shell_command, resolve_job, spawn_args
 
 
 def test_expand_matrix_cartesian_product():
@@ -442,9 +443,14 @@ def test_build_context_posargs_default_empty():
     assert ctx["posargs"] == ""
 
 
-def test_build_context_posargs_shell_quoted():
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_build_context_posargs_shell_quoted(platform, mocker):
+    mocker.patch("sys.platform", platform)
     ctx = build_context({}, "m", {}, "t", {}, ["-k", "slow and fast", "-x"])
-    assert ctx["posargs"] == "-k 'slow and fast' -x"
+    if sys.platform == "win32":
+        assert ctx["posargs"] == '-k "slow and fast" -x'
+    else:
+        assert ctx["posargs"] == "-k 'slow and fast' -x"
 
 
 def test_build_context_exposes_environ_copy(monkeypatch):
@@ -1080,6 +1086,17 @@ def test_resolve_job_continue_on_error_global_default_and_override():
     assert resolve_job({}, "m", {}, "t", {"t": base}).continue_on_error is False
 
 
+def _spawned_argv(command):
+    """Normalize what the CLI handed to subprocess.run back to an argv list.
+
+    On Windows spawn_args passes a single command-line string (so the run
+    string reaches cmd.exe without an extra escaping layer). The stubs here
+    only inspect simple space-free tokens, so a plain split is enough to
+    recover them.
+    """
+    return command if isinstance(command, list) else command.split()
+
+
 def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error="False"):
     """Run `uv-matrix run` over a one-axis matrix with stubbed subprocess results.
 
@@ -1100,7 +1117,8 @@ def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error
 
     def fake_run(command, **kwargs):
         # `python-version` flows through to `uv run --python <ver>`.
-        version = command[command.index("--python") + 1]
+        argv = _spawned_argv(command)
+        version = argv[argv.index("--python") + 1]
         return subprocess.CompletedProcess(command, exit_codes[version])
 
     monkeypatch.setattr(subprocess, "run", fake_run)
@@ -1296,7 +1314,20 @@ def _banner_run(tmp_path, monkeypatch, capsys, argv):
     monkeypatch.setattr(subprocess, "run", fake_run)
     rc = main(argv)
     assert rc == 0
-    return capsys.readouterr().out, seen[0]
+    return capsys.readouterr().out, _spawned_argv(seen[0])
+
+
+def _banner_command_line():
+    """The banner's "  + <command>" line for _write_project's single task.
+
+    The banner prints job.command_str, the shlex-quoted command, whose shell
+    tail is platform-dependent ("sh -c" on POSIX, "%COMSPEC% /c" on Windows),
+    so the expectation is built from _shell_command rather than hard-coded.
+    """
+    import shlex
+
+    shell = " ".join(shlex.quote(part) for part in _shell_command("x"))
+    return f"  + uv run --python 3.11 {shell}"
 
 
 def test_banner_default_shows_only_label(tmp_path, monkeypatch, capsys):
@@ -1312,7 +1343,7 @@ def test_banner_default_shows_only_label(tmp_path, monkeypatch, capsys):
 def test_banner_verbose_adds_command_line(tmp_path, monkeypatch, capsys):
     # -v adds the command line (as written, without uv's own --quiet) but not env.
     out, _ = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-v"])
-    assert "  + uv run --python 3.11 sh -c x" in out
+    assert _banner_command_line() in out
     assert "--quiet" not in out
     assert "env:" not in out
 
@@ -1320,7 +1351,7 @@ def test_banner_verbose_adds_command_line(tmp_path, monkeypatch, capsys):
 def test_banner_very_verbose_adds_env_line(tmp_path, monkeypatch, capsys):
     # -vv adds the env line, and uv keeps its default (chatty) output.
     out, command = _banner_run(tmp_path, monkeypatch, capsys, ["run", "-vv"])
-    assert "  + uv run --python 3.11 sh -c x" in out
+    assert _banner_command_line() in out
     assert "  env: .uv-matrix/slot-0" in out
     assert "--quiet" not in command
 
@@ -1334,7 +1365,7 @@ def test_dry_run_shows_command_at_default_verbosity(tmp_path, monkeypatch, capsy
     # it is the command as written, without uv's --quiet.
     assert main(["run", "--dry-run"]) == 0
     out = capsys.readouterr().out
-    assert "  + uv run --python 3.11 sh -c x" in out
+    assert _banner_command_line() in out
     assert "env:" not in out
 
 
@@ -1655,7 +1686,8 @@ def test_run_parallel_stop_closes_cancel_race(monkeypatch):
     ran = []
 
     def fake_run(cmd, env=None, cwd=None, **kwargs):
-        version = cmd[cmd.index("--python") + 1]
+        argv = _spawned_argv(cmd)
+        version = argv[argv.index("--python") + 1]
         ran.append(version)
         if version == "fail":
             return subprocess.CompletedProcess(cmd, 1, stdout="")
@@ -1850,3 +1882,70 @@ def test_iter_plan_exclude_value_type_mismatch():
         ConfigError, match=r"'exclude' value '1' for axis 'nums' matches no axis value"
     ):
         list(iter_plan(config))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX passthrough branch")
+def test_spawn_args_posix_passes_list_through():
+    # On POSIX execve hands argv to `sh -c` as a real array; nothing re-parses
+    # it, so the command list must be used as-is.
+    command = ["uv", "run", "--quiet", *_shell_command('pytest -k "a b"')]
+    assert spawn_args(command) is command
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="string form is Windows-only")
+def test_spawn_args_windows_keeps_run_string_verbatim():
+    # The argv prefix is quoted with list2cmdline rules; the trailing `run`
+    # string is appended raw so uv's own argv parsing, not an extra escaping
+    # layer, consumes its quotes.
+    command = ["uv", "run", "--quiet", "cmd.exe", "/c", 'python probe.py "a b c"']
+    assert spawn_args(command) == 'uv run --quiet cmd.exe /c python probe.py "a b c"'
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="exercises the real cmd.exe quoting chain")
+def test_win32_run_delivers_posargs_intact(tmp_path, monkeypatch):
+    """End-to-end, no mocks: uv-matrix -> uv run -> cmd.exe -> python.
+
+    Guards the string form built by spawn_args. With a plain argument list,
+    subprocess.list2cmdline escapes the quotes inside the trailing run
+    string, uv re-escapes them when spawning cmd.exe, and cmd.exe forwards
+    its /c tail raw -- so the probe received "a b c" split into three
+    arguments with literal quote characters.
+    """
+    import json
+    import shutil
+
+    from uv_matrix.cli import main
+
+    if shutil.which("uv") is None:
+        pytest.skip("uv executable not on PATH")
+
+    # A virtual project (no build-system table), so `uv run` only creates an
+    # environment and never tries to build or install the project itself.
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\n"
+        "name = 'quoting-probe'\n"
+        "version = '0.1.0'\n"
+        "requires-python = '>=3.10'\n"
+        "dependencies = []\n"
+        "[tool.uv-matrix.matrix.test]\n"
+        "tasks = ['probe']\n"
+        "[tool.uv-matrix.tasks.probe]\n"
+        "run = 'python probe.py {{ posargs }}'\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "probe.py").write_text(
+        "import json, sys\n"
+        "with open('argv.json', 'w', encoding='utf-8') as f:\n"
+        "    json.dump(sys.argv[1:], f)\n",
+        encoding="utf-8",
+    )
+    posargs = ["a b c", "-k", "slow and fast", "--name=x y", 'say "hi"', "print('a b')"]
+    monkeypatch.chdir(tmp_path)
+
+    argv_json = tmp_path / "argv.json"
+    # [] covers the sequential spawn path, --max-jobs 2 the parallel one; the
+    # second run reuses the environment the first one created.
+    for flags in ([], ["--max-jobs", "2"]):
+        argv_json.unlink(missing_ok=True)
+        assert main(["run", *flags, "--", *posargs]) == 0
+        assert json.loads(argv_json.read_text(encoding="utf-8")) == posargs

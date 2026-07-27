@@ -1,0 +1,13 @@
+[project]
+name = "win32-test"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv-matrix.matrix.test]
+tasks = ["run-python-c"]
+
+[tool.uv-matrix.tasks.run-python-c]
+run = "python main.py {{ posargs }}"

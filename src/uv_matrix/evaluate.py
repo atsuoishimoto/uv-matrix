@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shlex
+import subprocess
 import sys
 from typing import Any
 
@@ -93,7 +94,11 @@ def build_context(
         "matrix_name": matrix_name,
         "task": task_name,
         "task_config": task_config,
-        "posargs": shlex.join(posargs or []),
+        "posargs": (
+            subprocess.list2cmdline(posargs or [])
+            if sys.platform == "win32"
+            else shlex.join(posargs or [])
+        ),
         "environ": dict(os.environ),
         "platform": sys.platform,
     }
