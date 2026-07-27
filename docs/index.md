@@ -6,7 +6,16 @@ A small matrix task runner for Python projects using [Astral uv](https://docs.as
 Status: early development
 :::
 
-`uv-matrix` runs the same project tasks across Python versions, dependency variants, extras, dependency groups, and arbitrary task variants defined in `pyproject.toml`.
+`uv-matrix` runs the same project tasks across Python versions, dependency variants, extras, dependency groups, and arbitrary task variants defined in `pyproject.toml`:
+
+```toml
+[tool.uv-matrix.matrix.test]        # a matrix named "test"
+python-version = ["3.12", "3.13"]   # run the job on Python 3.12 and 3.13
+tasks = ["run_test"]                # run the "run_test" task in every cell
+
+[tool.uv-matrix.tasks.run_test]     # a task named "run_test"
+run = "pytest"                      # command run through `uv run`
+```
 
 ## Why uv-matrix?
 

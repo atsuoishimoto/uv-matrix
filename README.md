@@ -2,11 +2,19 @@
 
 A small matrix task runner for Python projects using [Astral uv](https://docs.astral.sh/uv/).
 
-> **Status:** early development.
-
-`uv-matrix` runs the same project tasks across Python versions, dependency variants, extras, dependency groups, and arbitrary task variants defined in `pyproject.toml`.
-
 **Documentation:** https://uv-matrix.readthedocs.io/
+
+`uv-matrix` runs the same project tasks across Python versions, dependency variants, extras, dependency groups, and arbitrary task variants defined in `pyproject.toml`:
+
+```toml
+[tool.uv-matrix.matrix.test]        # a matrix named "test"
+python-version = ["3.12", "3.13"]   # run the job on Python 3.12 and 3.13
+tasks = ["run_test"]                # run the "run_test" task in every cell
+
+[tool.uv-matrix.tasks.run_test]     # a task named "run_test"
+run = "pytest"                      # command run through `uv run`
+```
+
 
 ## Why uv-matrix?
 
@@ -22,58 +30,21 @@ Many Python projects need to run checks like this:
 
 `uv-matrix` requires Python 3.10+ and a working uv installation.
 
-Add it to a project:
+Run it directly:
+
+```bash
+uvx uv-matrix --help
+```
+
+
+Or add it to a project:
 
 ```bash
 uv add --dev uv-matrix
 uv run uv-matrix --help
 ```
 
-Or run it directly:
-
-```bash
-uvx uv-matrix --help
-```
-
-## Quick start
-
-Add a matrix and a task to `pyproject.toml`:
-
-```toml
-[tool.uv-matrix.matrix.test]        # a matrix named "test"
-python-version = ["3.12", "3.13"]   # run the job on Python 3.12 and 3.13
-tasks = ["run_test"]                # run the "run_test" task in every cell
-
-[tool.uv-matrix.tasks.run_test]     # a task named "run_test"
-run = "pytest"                      # command run through `uv run`
-```
-
-Run all jobs:
-
-```bash
-uv run uv-matrix run
-```
-
-List the jobs without running them:
-
-```bash
-uv run uv-matrix list
-```
-
-The matrix above expands to:
-
-```text
-test:run_test python-version=3.12
-test:run_test python-version=3.13
-```
-
-Each job is executed through `uv run`. For example, the first job runs roughly like this:
-
-```bash
-uv run --python 3.12 sh -c "pytest"
-```
-
-### Matrices
+## Matrices
 
 In this matrix, `python-version` and `webui` are axes.
 
@@ -88,7 +59,7 @@ Axes are combined as a cartesian product. In the example above, `python-version`
 
 `python-version` is a reserved axis. It is inherited by tasks that do not set their own Python version and is passed to `uv run --python`.
 
-### Tasks
+## Tasks
 
 Tasks are reusable command definitions.
 
@@ -117,7 +88,7 @@ Task fields can use [Jinja2](https://jinja.palletsprojects.com/en/stable/) templ
 uv-matrix run --task run_test -- -k slow
 ```
 
-### Conditions
+## Conditions
 
 `when` specifies a Python expression. If it evaluates to `False`, the task is skipped.
 
@@ -153,3 +124,8 @@ Instead of encoding combinations into environment names, `uv-matrix` keeps matri
 ## License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+
+## Status
+
+Early development.
