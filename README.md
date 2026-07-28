@@ -72,7 +72,7 @@ when = "platform != 'win32'"        # skip this task on Windows
 
 Common task fields include:
 
-* `run`: command to execute (shell form or exec form, see below)
+* `run`: command to execute
 * `extras`: optional project extras to include
 * `groups`: dependency groups to include
 * `cwd`: working directory for the command
@@ -87,22 +87,6 @@ Task fields can use [Jinja2](https://jinja.palletsprojects.com/en/stable/) templ
 ```bash
 uv-matrix run --task run_test -- -k slow
 ```
-
-### Shell form and exec form
-
-`run` accepts two forms:
-
-```toml
-run = "pytest {{ posargs }}"        # shell form: one string
-run = ["pytest", "{{ posargs }}"]   # exec form: an argv array
-```
-
-A string is run through the platform's shell (`sh -c` on POSIX, `cmd /c` on Windows) inside the uv environment, so pipes, `&&`, redirects, and variable expansion all work; `{{ posargs }}` renders as a single shell-quoted string.
-
-An array is executed directly, with no shell. Each element is rendered as a Jinja2 template and becomes exactly one argument, so arguments containing spaces or shell metacharacters need no quoting. Two rules differ from the other array fields (`groups`/`extras`/`uv-args`):
-
-* An element that is exactly `{{ posargs }}` expands in place to the arguments given after `--`, one argv element each — and to nothing when none were given, so `["pytest", "{{ posargs }}"]` runs plain `pytest`.
-* An element that renders to an empty string is kept as an empty argument rather than dropped.
 
 ## Conditions
 

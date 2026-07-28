@@ -168,8 +168,10 @@ A task's templates and expressions are evaluated **only at `run` time**, when
 jobs are actually built and executed. `list` merely enumerates the jobs and
 evaluates nothing — no template is rendered and no `when` expression is run.
 
-`run` — required, template
-: The command to run for the job.
+`run` — required, template (string) or list of templates (array)
+: The command to run for the job. A string is executed through the platform's
+  shell; an array is executed directly, one rendered element per argument. See
+  {ref}`run-forms`.
 
 `python-version` — optional, template
 : The Python version the job runs on. Inherited from the `python-version`
@@ -214,6 +216,35 @@ evaluates nothing — no template is rendered and no `when` expression is run.
   `true` continues with the remaining jobs. Either way the failure counts toward
   the exit code (a failing job never makes the run exit 0). Defaults to the
   global `[tool.uv-matrix] continue-on-error`.
+
+(run-forms)=
+### Shell form and exec form
+
+`run` accepts two forms, told apart by the TOML type:
+
+```toml
+run = "pytest {{ posargs }}"        # shell form: one string
+run = ["pytest", "{{ posargs }}"]   # exec form: an argv array
+```
+
+**Shell form** (a string): the whole string is rendered as one template and
+executed by the platform's shell (`sh -c` on POSIX, `cmd /c` on Windows) inside
+the uv environment, so pipes, `&&`, redirects, and variable expansion all work.
+`{{ posargs }}` renders as a single shell-quoted string (see {ref}`posargs`).
+
+**Exec form** (an array): the array is the command's argv, executed directly
+with no shell. Each element is rendered as a Jinja2 template and becomes
+exactly one argument, so an argument containing spaces or shell metacharacters
+needs no quoting. Two rules differ from the other list fields
+(`groups`/`extras`/`uv-args`):
+
+- An element that is exactly `{{ posargs }}` expands in place to the arguments
+  given after `--`, one argv element each — and to nothing when none were
+  given, so `["pytest", "{{ posargs }}"]` runs plain `pytest`. (A
+  `{{ posargs }}` embedded inside a larger element renders normally, as the
+  quoted joined string.)
+- An element that renders to an empty string is kept as an empty argument
+  rather than dropped, so argument positions never shift.
 
 (python-version)=
 ### Choosing the Python version
@@ -325,6 +356,9 @@ end in `or ''`: a bare `{{ cond and 'web' }}` renders the falsy branch as the
 literal text `False`, which would be passed through as `--extra False` rather
 than dropped.
 
+The exec-form `run` array is different: its elements are kept even when they
+render empty, so argument positions never shift. See {ref}`run-forms`.
+
 (variables)=
 ## Variables
 
@@ -427,6 +461,10 @@ Every selected job then runs `pytest -k slow -x`.
 spaces and shell-quoted, so values containing spaces or shell metacharacters
 survive intact when the `run` command is executed by the shell. For example,
 `-- -k "slow and fast"` expands to `-k 'slow and fast'`.
+
+An exec-form `run` (an array) is the exception: an element that is exactly
+`{{ posargs }}` expands to the raw arguments, one argv element each, instead
+of the joined string. See {ref}`run-forms`.
 
 When no `--` arguments are given, `{{ posargs }}` is the **empty string**, so
 `run = "pytest {{ posargs }}"` runs plain `pytest` and a task that does not
