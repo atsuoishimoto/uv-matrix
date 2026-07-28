@@ -438,6 +438,74 @@ def test_resolve_job_strips_rendered_list_elements():
     ]
 
 
+def test_resolve_job_shell_form_sets_shell_flag():
+    job = resolve_job({}, "m", {}, "test", {"test": {"run": "pytest"}})
+    assert job.shell is True
+
+
+def test_resolve_job_exec_form_builds_argv():
+    tasks = {"test": {"python-version": "3.12", "run": ["pytest", "-k", "{{ matrix['sel'] }}"]}}
+    job = resolve_job({}, "m", {"sel": "a b"}, "test", tasks)
+    # No shell wrapper; `--` stops uv's flag parsing before the argv. The
+    # rendered element stays one argument even though it contains a space.
+    assert job.command == ["uv", "run", "--python", "3.12", "--", "pytest", "-k", "a b"]
+    assert job.shell is False
+
+
+def test_resolve_job_exec_form_splices_posargs():
+    tasks = {"test": {"run": ["pytest", "{{ posargs }}", "-x"]}}
+    job = resolve_job({}, "m", {}, "test", tasks, ["-k", "slow and fast"])
+    # The standalone placeholder expands to the raw arguments, one argv
+    # element each -- not the shell-quoted joined string.
+    assert job.command == ["uv", "run", "--", "pytest", "-k", "slow and fast", "-x"]
+
+
+def test_resolve_job_exec_form_empty_posargs_adds_no_elements():
+    tasks = {"test": {"run": ["pytest", "{{ posargs }}"]}}
+    job = resolve_job({}, "m", {}, "test", tasks, [])
+    assert job.command == ["uv", "run", "--", "pytest"]
+
+
+def test_resolve_job_exec_form_posargs_placeholder_allows_whitespace():
+    tasks = {"test": {"run": ["pytest", "  {{  posargs  }}  "]}}
+    job = resolve_job({}, "m", {}, "test", tasks, ["-x"])
+    assert job.command == ["uv", "run", "--", "pytest", "-x"]
+
+
+def test_resolve_job_exec_form_keeps_empty_rendered_elements():
+    tasks = {"test": {"run": ["pytest", "{{ matrix['sel'] or '' }}"]}}
+    job = resolve_job({}, "m", {"sel": ""}, "test", tasks)
+    # Unlike groups/extras/uv-args, an element rendering to "" is kept:
+    # an empty argument is legitimate and positions must not shift.
+    assert job.command == ["uv", "run", "--", "pytest", ""]
+
+
+def test_resolve_job_exec_form_embedded_posargs_renders_as_string():
+    tasks = {"test": {"run": ["pytest", "--addopts={{ posargs }}"]}}
+    job = resolve_job({}, "m", {}, "test", tasks, ["-x", "-q"])
+    # Embedded (not standalone) {{ posargs }} renders like any template:
+    # the joined string, inside the single argument.
+    assert job.command == ["uv", "run", "--", "pytest", "--addopts=-x -q"]
+
+
+def test_resolve_job_exec_form_rejects_non_string_element():
+    tasks = {"test": {"run": ["pytest", 3]}}
+    with pytest.raises(TaskError, match="'run' array elements must be strings"):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
+def test_resolve_job_exec_form_rejects_empty_command():
+    tasks = {"test": {"run": ["{{ posargs }}"]}}
+    with pytest.raises(TaskError, match="empty command"):
+        resolve_job({}, "m", {}, "test", tasks, [])
+
+
+def test_resolve_job_run_must_be_string_or_array():
+    tasks = {"test": {"run": 42}}
+    with pytest.raises(TaskError, match="'run' must be a string or an array"):
+        resolve_job({}, "m", {}, "test", tasks)
+
+
 def test_build_context_posargs_default_empty():
     ctx = build_context({}, "m", {}, "t", {})
     assert ctx["posargs"] == ""
@@ -1889,7 +1957,15 @@ def test_spawn_args_posix_passes_list_through():
     # On POSIX execve hands argv to `sh -c` as a real array; nothing re-parses
     # it, so the command list must be used as-is.
     command = ["uv", "run", "--quiet", *_shell_command('pytest -k "a b"')]
-    assert spawn_args(command) is command
+    assert spawn_args(command, shell=True) is command
+
+
+def test_spawn_args_exec_form_passes_list_through():
+    # Exec form never reaches cmd.exe's raw /c tail: uv spawns the child
+    # directly, and list2cmdline / uv's argv parsing are exact inverses, so
+    # the plain list is correct on every platform.
+    command = ["uv", "run", "--quiet", "--", "pytest", "-k", "a b"]
+    assert spawn_args(command, shell=False) is command
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="string form is Windows-only")
@@ -1898,7 +1974,7 @@ def test_spawn_args_windows_keeps_run_string_verbatim():
     # string is appended raw so uv's own argv parsing, not an extra escaping
     # layer, consumes its quotes.
     command = ["uv", "run", "--quiet", "cmd.exe", "/c", 'python probe.py "a b c"']
-    assert spawn_args(command) == 'uv run --quiet cmd.exe /c python probe.py "a b c"'
+    assert spawn_args(command, shell=True) == 'uv run --quiet cmd.exe /c python probe.py "a b c"'
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="exercises the real cmd.exe quoting chain")
