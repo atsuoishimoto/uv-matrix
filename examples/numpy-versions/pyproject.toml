@@ -1,0 +1,19 @@
+[project]
+name = "numpy-versions"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=2.0",
+]
+
+
+[tool.uv-matrix.matrix.test]
+python-version = ["3.12", "3.13"]
+numpy-version = ["2.3", "2.4"]
+tasks = ["run"]
+
+[tool.uv-matrix.tasks.run]
+uv-args = ["--with", "numpy=={{ numpy_version }}.*"]
+run = "python main.py"
