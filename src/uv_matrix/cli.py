@@ -268,7 +268,9 @@ def _run_sequential(
     for index, job in enumerate(runnable):
         _print_job_banner(job, style, verbosity)
         env = _job_env(job, root)
-        result = subprocess.run(spawn_args(_job_command(job, verbosity)), env=env, cwd=job.cwd)
+        result = subprocess.run(
+            spawn_args(_job_command(job, verbosity), job.shell), env=env, cwd=job.cwd
+        )
         if _record_result(job, result.returncode, style, failed):
             return failed, len(runnable) - index - 1
     return failed, 0
@@ -316,7 +318,7 @@ def _run_parallel(
         slot = slots.get()
         try:
             result = subprocess.run(
-                spawn_args(_job_command(job, verbosity)),
+                spawn_args(_job_command(job, verbosity), job.shell),
                 env=_job_env(job, root, slot),
                 cwd=job.cwd,
                 stdout=subprocess.PIPE,

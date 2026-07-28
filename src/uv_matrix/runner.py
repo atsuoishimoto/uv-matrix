@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -31,14 +32,58 @@ def _shell_command(run: str) -> list[str]:
     return ["sh", "-c", run]
 
 
-def spawn_args(command: list[str]) -> list[str] | str:
+# An exec-form `run` element that is exactly a `{{ posargs }}` placeholder
+# (surrounding whitespace allowed). Matched before rendering: such an element
+# is replaced by the raw arguments given after `--` on the command line,
+# spliced in as separate argv elements, instead of being rendered into the
+# shell-quoted joined string the `posargs` context variable holds.
+_POSARGS_ELEMENT = re.compile(r"\s*\{\{\s*posargs\s*\}\}\s*")
+
+
+def _exec_command(
+    run: list[Any], task_name: str, ctx: dict[str, Any], posargs: list[str]
+) -> list[str]:
+    """Build the argv for an exec-form (array) ``run``.
+
+    Each element is rendered as a Jinja2 template and becomes exactly one
+    argument. Unlike ``groups``/``extras``/``uv-args`` there is no stripping
+    and an element that renders to ``""`` is kept — an empty argument is
+    legitimate in an argv, and dropping it would silently change the
+    command's argument positions.
+
+    The exception is an element that is exactly ``{{ posargs }}``: it expands
+    to the raw arguments after ``--``, one argv element each — zero elements
+    when none were given, so ``["pytest", "{{ posargs }}"]`` runs plain
+    ``pytest``. A ``{{ posargs }}`` embedded inside a larger element renders
+    normally, as the shell-quoted joined string.
+    """
+    argv: list[str] = []
+    for item in run:
+        if not isinstance(item, str):
+            raise TaskError(
+                f"task {task_name!r}: 'run' array elements must be strings, "
+                f"got {type(item).__name__}"
+            )
+        if _POSARGS_ELEMENT.fullmatch(item):
+            argv.extend(posargs)
+        else:
+            argv.append(render_string(item, ctx))
+    if not argv:
+        raise TaskError(f"task {task_name!r}: 'run' resolved to an empty command")
+    return argv
+
+
+def spawn_args(command: list[str], shell: bool) -> list[str] | str:
     """Turn a job command into the argument subprocess.run should get.
+
+    ``shell`` is the job's form: true for a string ``run`` (wrapped by
+    :func:`_shell_command`), false for an exec-form (array) ``run``.
 
     On POSIX the list is passed through: execve hands argv to "sh -c" as a
     real array, so the trailing run string arrives byte-for-byte intact.
 
-    On Windows a list would be joined by subprocess.list2cmdline, which
-    escapes the quotes inside the run string as \\". uv parses its own
+    On Windows a shell-form list would be joined by subprocess.list2cmdline,
+    which escapes the quotes inside the run string as \\". uv parses its own
     command line back correctly, but re-escapes the string the same way when
     spawning cmd.exe -- and cmd.exe forwards its /c tail to the child raw,
     so those escapes leak into the child's command line and split quoted
@@ -48,12 +93,16 @@ def spawn_args(command: list[str]) -> list[str] | str:
     list2cmdline used for posargs) consumes its quotes and re-quotes each
     token cleanly for cmd.exe.
 
-    command[-1] is the run string: resolve_job appends the _shell_command
-    triple last and the CLI splices verbosity flags right after "uv run",
-    so the invariant holds for every job command. Only the argv prefix goes
-    through list2cmdline; the run string is appended verbatim.
+    For a shell-form job, command[-1] is the run string: resolve_job appends
+    the _shell_command triple last and the CLI splices verbosity flags right
+    after "uv run", so the invariant holds. Only the argv prefix goes through
+    list2cmdline; the run string is appended verbatim.
+
+    An exec-form job never involves cmd.exe's raw /c tail: uv spawns the
+    child directly, and list2cmdline / uv's argv parsing are exact inverses.
+    The plain list is therefore correct on every platform.
     """
-    if sys.platform != "win32":
+    if sys.platform != "win32" or not shell:
         return command
     return f"{subprocess.list2cmdline(command[:-1])} {command[-1]}"
 
@@ -75,6 +124,9 @@ class Job:
     env: dict[str, str]
     cwd: str | None
     continue_on_error: bool
+    # True for a string `run` (executed through the platform shell), false for
+    # an exec-form (array) `run`. Windows spawning differs by form; see spawn_args.
+    shell: bool
 
     @property
     def label(self) -> str:
@@ -232,7 +284,22 @@ def resolve_job(
 
     if "run" not in task_config:
         raise TaskError(f"task {task_name!r}: missing 'run'")
-    run = render_string(task_config["run"], ctx)
+    run = task_config["run"]
+    if isinstance(run, str):
+        # Shell form: `run` is one template, rendered whole and executed by a
+        # shell inside the uv environment, so shell syntax (pipes, &&,
+        # redirects, variable expansion) all apply with the env's tools. The
+        # shell is chosen per-OS (sh on POSIX, cmd.exe on Windows).
+        tail = _shell_command(render_string(run, ctx))
+        shell = True
+    elif isinstance(run, list):
+        # Exec form: the array is the argv, executed directly with no shell.
+        # The `--` stops uv's own flag parsing, so an element that renders to
+        # something starting with `-` cannot be taken as a uv flag.
+        tail = ["--", *_exec_command(run, task_name, ctx, posargs or [])]
+        shell = False
+    else:
+        raise TaskError(f"task {task_name!r}: 'run' must be a string or an array")
 
     groups = _rendered_list(task_config, "groups", task_name, ctx)
     extras = _rendered_list(task_config, "extras", task_name, ctx)
@@ -247,10 +314,7 @@ def resolve_job(
         command += ["--extra", extra]
     # Arbitrary uv flags (e.g. --with, --no-default-groups) passed through verbatim.
     command += uv_args
-    # `run` is executed by a shell inside the uv environment, so shell syntax
-    # (pipes, &&, redirects, variable expansion) all apply with the env's tools.
-    # The shell is chosen per-OS (sh on POSIX, cmd.exe on Windows).
-    command += _shell_command(run)
+    command += tail
 
     cwd = render_string(task_config["cwd"], ctx) if "cwd" in task_config else None
     # The task's own `continue-on-error` wins; otherwise the global
@@ -267,4 +331,5 @@ def resolve_job(
         env=env,
         cwd=cwd,
         continue_on_error=continue_on_error,
+        shell=shell,
     )
