@@ -1,6 +1,6 @@
 # uv-matrix
 
-A small matrix task runner for Python projects using [Astral uv](https://docs.astral.sh/uv/).
+A simple matrix task runner for Python projects using [Astral uv](https://docs.astral.sh/uv/).
 
 **Documentation:** https://uv-matrix.readthedocs.io/
 
