@@ -46,10 +46,10 @@ _JINJA = jinja2.Environment(
 )
 
 
-# Globals for Python expression evaluation (``when``, string
-# ``continue-on-error``, string ``vars`` values): every ``builtins`` member
-# plus the ``sys`` and ``platform`` modules. The job context is passed as
-# locals, so context names shadow these on a clash.
+# Globals for Python expression evaluation (``when`` and string ``vars``
+# values): every ``builtins`` member plus the ``sys`` and ``platform``
+# modules. The job context is passed as locals, so context names shadow
+# these on a clash.
 _EXPR_GLOBALS = {**vars(builtins), "sys": sys, "platform": platform}
 
 

@@ -1147,12 +1147,25 @@ def test_resolve_job_extras_and_continue_on_error():
             "python-version": "3.12",
             "extras": ["cli"],
             "run": "pytest",
-            "continue-on-error": "matrix.get('experimental', False)",
+            "continue-on-error": True,
         }
     }
     job = resolve_job({}, "m", {"experimental": True}, "test", tasks)
     assert "--extra" in job.command and "cli" in job.command
     assert job.continue_on_error is True
+
+
+def test_resolve_job_continue_on_error_rejects_non_bool():
+    # Only a TOML boolean is accepted; the old string-expression form errors.
+    tasks = {"t": {"run": "x", "continue-on-error": "matrix.get('experimental', False)"}}
+    with pytest.raises(TaskError, match=r"task 't'.*'continue-on-error' must be a bool.*got str"):
+        resolve_job({}, "m", {}, "t", tasks)
+
+    config = {"continue-on-error": 1}
+    with pytest.raises(
+        TaskError, match=r"\[tool\.uv-matrix\].*'continue-on-error' must be a bool.*got int"
+    ):
+        resolve_job(config, "m", {}, "t", {"t": {"run": "x"}})
 
 
 def test_resolve_job_continue_on_error_global_default_and_override():
@@ -1178,7 +1191,7 @@ def _spawned_argv(command):
     return command if isinstance(command, list) else command.split()
 
 
-def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error="False"):
+def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error=False):
     """Run `uv-matrix run` over a one-axis matrix with stubbed subprocess results.
 
     `exit_codes` maps a python version to the exit code its job should return.
@@ -1191,7 +1204,7 @@ def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error
     (tmp_path / "pyproject.toml").write_text(
         f"[tool.uv-matrix.matrix.m]\npython = {versions!r}\ntasks = ['t']\n"
         f"[tool.uv-matrix.tasks.t]\npython-version = \"{{{{ matrix['python'] }}}}\"\n"
-        f"run = 'x'\ncontinue-on-error = {continue_on_error!r}\n",
+        f"run = 'x'\ncontinue-on-error = {str(continue_on_error).lower()}\n",
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
@@ -1215,7 +1228,7 @@ def test_run_continue_on_error_runs_all_but_exits_nonzero(tmp_path, monkeypatch,
         monkeypatch,
         capsys,
         exit_codes={"3.11": 0, "3.12": 1, "3.13": 2},
-        continue_on_error="True",
+        continue_on_error=True,
     )
     assert rc == 1
     assert "Failed jobs:" in out
@@ -1248,18 +1261,32 @@ def test_run_summary_all_pass(tmp_path, monkeypatch, capsys):
 
 
 def test_run_failures_all_counted(tmp_path, monkeypatch, capsys):
-    # 3.11 continues on error, 3.12 does not; both failures count toward exit 1.
-    rc, out = _run_project(
-        tmp_path,
-        monkeypatch,
-        capsys,
-        exit_codes={"3.11": 1, "3.12": 1},
-        continue_on_error="matrix['python'] == '3.11'",
+    # Task `a` continues on error, task `b` does not; both failures count
+    # toward exit 1.
+    import subprocess
+
+    from uv_matrix.cli import main
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.uv-matrix.matrix.m]\npython = ['3.11']\ntasks = ['a', 'b']\n"
+        "[tool.uv-matrix.tasks.a]\npython-version = \"{{ matrix['python'] }}\"\n"
+        "run = 'xa'\ncontinue-on-error = true\n"
+        "[tool.uv-matrix.tasks.b]\npython-version = \"{{ matrix['python'] }}\"\n"
+        "run = 'xb'\ncontinue-on-error = false\n",
+        encoding="utf-8",
     )
+    monkeypatch.chdir(tmp_path)
+
+    def fake_run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    rc = main(["run"])
+    out = capsys.readouterr().out
     assert rc == 1
     assert "Failed jobs:" in out
-    assert "m:t python=3.11: exit 1" in out
-    assert "m:t python=3.12: exit 1" in out
+    assert "m:a python=3.11: exit 1" in out
+    assert "m:b python=3.11: exit 1" in out
     assert "All required jobs passed." not in out
 
 
