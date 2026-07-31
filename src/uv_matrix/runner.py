@@ -319,8 +319,17 @@ def resolve_job(
     cwd = render_string(task_config["cwd"], ctx) if "cwd" in task_config else None
     # The task's own `continue-on-error` wins; otherwise the global
     # [tool.uv-matrix] default applies; otherwise false (stop on this failure).
-    coe = task_config.get("continue-on-error", config.get("continue-on-error", False))
-    continue_on_error = bool(eval_expr(coe, ctx))
+    # Only a TOML boolean is accepted -- not an expression string.
+    if "continue-on-error" in task_config:
+        owner, coe = f"task {task_name!r}", task_config["continue-on-error"]
+    else:
+        owner, coe = "[tool.uv-matrix]", config.get("continue-on-error", False)
+    if not isinstance(coe, bool):
+        raise TaskError(
+            f"{owner}: 'continue-on-error' must be a bool (true/false), "
+            f"got {type(coe).__name__}"
+        )
+    continue_on_error = coe
 
     return Job(
         matrix_name=matrix_name,

@@ -7,9 +7,13 @@
   expression like `when = "platform == 'win32'"` no longer matches and must
   be rewritten as `when = "sys.platform == 'win32'"` (or
   `platform.system() == 'Windows'`).
+- **Breaking change**: `continue-on-error` now accepts only a TOML boolean
+  (`true`/`false`), at the top level and per task alike. The string expression
+  form was removed: a value like `continue-on-error = "python_version ==
+  '3.14'"` is now an error instead of being evaluated per job.
 - The `sys` module is now exposed as a reserved context name, and the members
-  of `builtins` are available in Python expressions (`when`, string
-  `continue-on-error`, string `vars` values) via the evaluation globals.
+  of `builtins` are available in Python expressions (`when`, string `vars`
+  values) via the evaluation globals.
 
 ## 0.0.5 2026/07/27
 

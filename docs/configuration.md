@@ -211,11 +211,12 @@ evaluates nothing — no template is rendered and no `when` expression is run.
 `when` — optional, expression
 : Condition deciding whether the job runs.
 
-`continue-on-error` — optional, expression or bool
+`continue-on-error` — optional, bool
 : What to do when this job's command fails. `false` (the default) stops the run;
   `true` continues with the remaining jobs. Either way the failure counts toward
   the exit code (a failing job never makes the run exit 0). Defaults to the
-  global `[tool.uv-matrix] continue-on-error`.
+  global `[tool.uv-matrix] continue-on-error`. Only a TOML boolean is accepted;
+  any other value (including an expression string) is an error.
 
 (run-forms)=
 ### Shell form and exec form
@@ -435,9 +436,8 @@ run = "ruff check ."
   Example: `when = "platform.system() == 'Windows'"` skips the job except on
   Windows.
 
-Python expressions (`when`, a string `continue-on-error`, string `vars` values)
-additionally see every member of the `builtins` module (`len`, `min`, `str`,
-...) as a plain name.
+Python expressions (`when`, string `vars` values) additionally see every
+member of the `builtins` module (`len`, `min`, `str`, ...) as a plain name.
 
 Used together in a `run` template:
 
