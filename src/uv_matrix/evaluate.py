@@ -8,7 +8,9 @@ repositories only.
 
 from __future__ import annotations
 
+import builtins
 import os
+import platform
 import shlex
 import subprocess
 import sys
@@ -44,6 +46,13 @@ _JINJA = jinja2.Environment(
 )
 
 
+# Globals for Python expression evaluation (``when``, string
+# ``continue-on-error``, string ``vars`` values): every ``builtins`` member
+# plus the ``sys`` and ``platform`` modules. The job context is passed as
+# locals, so context names shadow these on a clash.
+_EXPR_GLOBALS = {**vars(builtins), "sys": sys, "platform": platform}
+
+
 def build_context(
     config: dict[str, Any],
     matrix_name: str,
@@ -64,9 +73,10 @@ def build_context(
     template can read a variable with ``{{ environ['HOME'] }}``. It is a copy:
     mutating it from an expression does not leak into the real environment.
 
-    ``platform`` is ``sys.platform`` of the running interpreter (e.g.
-    ``"linux"``, ``"darwin"``, ``"win32"``), so a ``when`` expression can gate a
-    job by OS (``when = "platform == 'win32'"``).
+    ``sys`` and ``platform`` are the standard-library modules, so a ``when``
+    expression can gate a job by OS (``when = "sys.platform == 'win32'"`` or
+    ``when = "platform.system() == 'Windows'"``) and a template can read them
+    too (``{{ sys.platform }}``).
 
     Each ``[tool.uv-matrix.vars]`` string value is evaluated as a **Python
     expression** with the same rules as ``when`` (:func:`eval_expr`): a
@@ -86,7 +96,7 @@ def build_context(
     ``matrix['python-version']`` / ``vars['reports']`` lookups keep working.
     Precedence on a name clash is reserved name > matrix axis > vars: a reserved
     key below overrides an alias of the same name (so an axis named ``platform``
-    cannot shadow the builtin), and a matrix axis overrides a ``vars`` key (the
+    cannot shadow the module), and a matrix axis overrides a ``vars`` key (the
     cell is the more specific, per-job value).
     """
     base = {
@@ -100,7 +110,8 @@ def build_context(
             else shlex.join(posargs or [])
         ),
         "environ": dict(os.environ),
-        "platform": sys.platform,
+        "sys": sys,
+        "platform": platform,
     }
     cell_alias = {key.replace("-", "_"): value for key, value in cell.items()}
     vars_dict: dict[str, Any] = {}
@@ -146,6 +157,6 @@ def eval_expr(value: Any, ctx: dict[str, Any]) -> Any:
     if not isinstance(value, str):
         return value
     try:
-        return eval(value, {}, ctx)
+        return eval(value, _EXPR_GLOBALS, ctx)
     except Exception as exc:
         raise EvalError(f"failed to evaluate expression {value!r}: {exc}") from exc

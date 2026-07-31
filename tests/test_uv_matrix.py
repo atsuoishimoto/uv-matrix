@@ -324,11 +324,11 @@ def test_build_context_invalid_var_expression_names_the_var():
 def test_build_context_reserved_names_and_matrix_axis_win_over_aliases():
     # Reserved names take precedence over an axis alias of the same name, and a
     # matrix axis takes precedence over a `vars` key of the same name.
-    import sys
+    import platform
 
     config = {"vars": {"platform": "'from-vars'", "shared": "'from-vars'"}}
     ctx = build_context(config, "m", {"platform": "from-axis", "shared": "from-axis"}, "t", {})
-    assert ctx["platform"] == sys.platform  # reserved builtin, not the axis
+    assert ctx["platform"] is platform  # reserved module, not the axis
     assert ctx["shared"] == "from-axis"  # matrix axis beats vars
 
 
@@ -530,20 +530,33 @@ def test_build_context_exposes_environ_copy(monkeypatch):
     assert os.environ["UV_MATRIX_TEST_VAR"] == "hello"
 
 
-def test_build_context_exposes_platform():
+def test_build_context_exposes_sys_and_platform_modules():
+    import platform
     import sys
 
     ctx = build_context({}, "m", {}, "t", {})
-    assert ctx["platform"] == sys.platform
+    assert ctx["sys"] is sys
+    assert ctx["platform"] is platform
 
 
 def test_when_can_gate_on_platform():
     import sys
 
-    tasks = {"test": {"run": "pytest", "when": f"platform == {sys.platform!r}"}}
+    tasks = {"test": {"run": "pytest", "when": f"sys.platform == {sys.platform!r}"}}
     assert resolve_job({}, "m", {}, "test", tasks) is not None
-    tasks_off = {"test": {"run": "pytest", "when": "platform == 'nonexistent-os'"}}
+    tasks_off = {"test": {"run": "pytest", "when": "sys.platform == 'nonexistent-os'"}}
     assert resolve_job({}, "m", {}, "test", tasks_off) is None
+    import platform as platform_mod
+
+    tasks_mod = {
+        "test": {"run": "pytest", "when": f"platform.system() == {platform_mod.system()!r}"}
+    }
+    assert resolve_job({}, "m", {}, "test", tasks_mod) is not None
+
+
+def test_expressions_see_builtins_members():
+    tasks = {"test": {"run": "pytest", "when": "len(matrix) == 0 and min(1, 2) == 1"}}
+    assert resolve_job({}, "m", {}, "test", tasks) is not None
 
 
 def test_resolve_job_expands_environ_into_run(monkeypatch):
