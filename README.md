@@ -67,7 +67,7 @@ Tasks are reusable command definitions.
 [tool.uv-matrix.tasks.run_test]
 run = "pytest {{ posargs }}"        # {{ posargs }}: args after `--`
 extras = ["{{ webui }}"]            # include the current webui extra. ignored if webui is blank.
-when = "platform != 'win32'"        # skip this task on Windows
+when = "sys.platform != 'win32'"    # skip this task on Windows
 ```
 
 Common task fields include:

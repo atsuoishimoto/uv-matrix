@@ -424,12 +424,20 @@ run = "ruff check ."
   Example: `{{ environ['HOME'] }}` renders to the caller's home directory, and
   `when = "environ.get('CI')"` runs the task only under CI.
 
-`platform`
-: `sys.platform` of the running interpreter — a string identifying the OS (e.g.
-  `'linux'`, `'darwin'`, `'win32'`). Useful to gate a job by OS in a `when`
+`sys`
+: The standard-library `sys` module. Useful to gate a job by OS in a `when`
   expression.
-  Example value `'linux'`, so `when = "platform == 'win32'"` skips the job
-  except on Windows.
+  Example: `when = "sys.platform == 'win32'"` skips the job except on Windows.
+
+`platform`
+: The standard-library `platform` module (it was previously the `sys.platform`
+  string — see the changelog).
+  Example: `when = "platform.system() == 'Windows'"` skips the job except on
+  Windows.
+
+Python expressions (`when`, a string `continue-on-error`, string `vars` values)
+additionally see every member of the `builtins` module (`len`, `min`, `str`,
+...) as a plain name.
 
 Used together in a `run` template:
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking change**: the reserved `platform` context name is now the
+  `platform` module instead of the `sys.platform` string. An existing
+  expression like `when = "platform == 'win32'"` no longer matches and must
+  be rewritten as `when = "sys.platform == 'win32'"` (or
+  `platform.system() == 'Windows'`).
+- The `sys` module is now exposed as a reserved context name, and the members
+  of `builtins` are available in Python expressions (`when`, string
+  `continue-on-error`, string `vars` values) via the evaluation globals.
+
 ## 0.0.5 2026/07/27
 
 - Parallel runs now execute every job fully in parallel: each parallel slot
