@@ -2,10 +2,6 @@ name: Release distributions
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing release tag to attach distributions to (e.g. 0.1.0)"
-        required: true
 
 permissions:
   contents: write
@@ -17,16 +13,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Fail unless run from a tag
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::This workflow must be run from a release tag, not a branch." >&2
+          exit 1
+
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.tag }}
 
       - uses: astral-sh/setup-uv@v8.2.0
 
       - name: Verify the release exists
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release view "${{ inputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null
+        run: gh release view "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" >/dev/null
 
       - name: Build distributions
         run: |
@@ -54,5 +54,5 @@ jobs:
       - name: Upload distributions to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.tag }}" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+        run: gh release upload "${{ github.ref_name }}" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
