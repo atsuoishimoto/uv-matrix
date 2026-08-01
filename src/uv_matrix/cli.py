@@ -370,6 +370,11 @@ def _cmd_run(config: dict[str, Any], args: argparse.Namespace, root: Path) -> in
     for matrix_name, cell, task_name in _selected(config, args.matrix, args.task, filters):
         job = resolve_job(config, matrix_name, cell, task_name, task_defs, posargs)
         if job is not None:
+            # An explicit --continue-on-error/--no-continue-on-error is a
+            # run-time decision, so it beats both the task's and the global
+            # config value; None (no flag) leaves the resolved value alone.
+            if args.continue_on_error is not None:
+                job.continue_on_error = args.continue_on_error
             runnable.append(job)
         else:
             # A `when` that evaluated false. Recorded so the summary can report a
@@ -468,6 +473,16 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("-f", "--filter", action="append", metavar="KEY=VALUE", help=_FILTER_HELP)
     run_p.add_argument(
         "-d", "--dry-run", action="store_true", help="print commands without running them"
+    )
+    run_p.add_argument(
+        "--continue-on-error",
+        dest="continue_on_error",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "continue past failing jobs (--no-continue-on-error stops on failure); "
+            "overrides continue-on-error in pyproject.toml"
+        ),
     )
     run_p.add_argument(
         "-n",

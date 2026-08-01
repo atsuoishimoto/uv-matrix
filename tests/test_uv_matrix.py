@@ -1178,10 +1178,13 @@ def _spawned_argv(command):
     return command if isinstance(command, list) else command.split()
 
 
-def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error="False"):
+def _run_project(
+    tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error="False", cli_args=()
+):
     """Run `uv-matrix run` over a one-axis matrix with stubbed subprocess results.
 
     `exit_codes` maps a python version to the exit code its job should return.
+    `cli_args` are extra command-line arguments appended after `run`.
     """
     import subprocess
 
@@ -1203,7 +1206,7 @@ def _run_project(tmp_path, monkeypatch, capsys, *, exit_codes, continue_on_error
         return subprocess.CompletedProcess(command, exit_codes[version])
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    rc = main(["run"])
+    rc = main(["run", *cli_args])
     return rc, capsys.readouterr().out
 
 
@@ -1261,6 +1264,37 @@ def test_run_failures_all_counted(tmp_path, monkeypatch, capsys):
     assert "m:t python=3.11: exit 1" in out
     assert "m:t python=3.12: exit 1" in out
     assert "All required jobs passed." not in out
+
+
+def test_run_continue_on_error_flag_overrides_config(tmp_path, monkeypatch, capsys):
+    # The task says stop on failure (the default), but the CLI flag keeps the
+    # run going, so the job after the failure still runs.
+    rc, out = _run_project(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        exit_codes={"3.11": 1, "3.12": 0},
+        cli_args=["--continue-on-error"],
+    )
+    assert rc == 1
+    assert "==> m:t python=3.12" in out  # reached despite the earlier failure
+    assert "m:t python=3.11: exit 1" in out
+
+
+def test_run_no_continue_on_error_flag_overrides_config(tmp_path, monkeypatch, capsys):
+    # The task says continue-on-error, but the CLI flag forces a stop at the
+    # first failure.
+    rc, out = _run_project(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        exit_codes={"3.11": 1, "3.12": 0},
+        continue_on_error="True",
+        cli_args=["--no-continue-on-error"],
+    )
+    assert rc == 1
+    assert "==> m:t python=3.12" not in out  # not reached after the first failure
+    assert "m:t python=3.11: exit 1" in out
 
 
 def test_resolve_job_undefined_task():
