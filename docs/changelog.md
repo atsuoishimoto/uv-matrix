@@ -10,6 +10,13 @@
 - The `sys` module is now exposed as a reserved context name, and the members
   of `builtins` are available in Python expressions (`when`, string
   `continue-on-error`, string `vars` values) via the evaluation globals.
+- The task `run` field now accepts an array as well as a string (exec form):
+  each element is rendered as a Jinja2 template into exactly one argv element
+  and executed directly with no shell, after a `--` that stops uv's own flag
+  parsing. Unlike other list fields, an element that renders empty is kept as
+  an empty argument, and an element that is exactly `{{ posargs }}` is spliced
+  with the raw CLI arguments given after `--`. The string form is unchanged
+  (rendered as one template and run through the platform shell).
 
 ## 0.0.5 2026/07/27
 
