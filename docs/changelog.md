@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.6 2026/08/01
 
 - **Breaking change**: the reserved `platform` context name is now the
   `platform` module instead of the `sys.platform` string. An existing
@@ -8,8 +8,8 @@
   be rewritten as `when = "sys.platform == 'win32'"` (or
   `platform.system() == 'Windows'`).
 - The `sys` module is now exposed as a reserved context name, and the members
-  of `builtins` are available in Python expressions (`when`, string
-  `continue-on-error`, string `vars` values) via the evaluation globals.
+  of `builtins` are available in Python expressions (`when`, string `vars` values) 
+  via the evaluation globals.
 - The task `run` field now accepts an array as well as a string (exec form):
   each element is rendered as a Jinja2 template into exactly one argv element
   and executed directly with no shell, after a `--` that stops uv's own flag
