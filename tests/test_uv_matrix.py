@@ -1607,9 +1607,7 @@ def test_job_env_uses_slot_directory():
     job = _simple_job()
     root = Path("/proj")
     # Sequential runs default to slot 0.
-    assert cli._job_env(job, root)["UV_PROJECT_ENVIRONMENT"] == str(
-        root / cli.ENV_DIR / "slot-0"
-    )
+    assert cli._job_env(job, root)["UV_PROJECT_ENVIRONMENT"] == str(root / cli.ENV_DIR / "slot-0")
     assert cli._job_env(job, root, slot=2)["UV_PROJECT_ENVIRONMENT"] == str(
         root / cli.ENV_DIR / "slot-2"
     )
@@ -1944,9 +1942,7 @@ def test_iter_plan_exclude_invalid_structure():
 
 def test_iter_plan_exclude_unknown_value():
     # A value that matches no axis value is an error, not a silent no-op.
-    config = {
-        "matrix": {"m": {"x": ["a", "b"], "tasks": ["t"], "exclude": [{"x": "c"}]}}
-    }
+    config = {"matrix": {"m": {"x": ["a", "b"], "tasks": ["t"], "exclude": [{"x": "c"}]}}}
     with pytest.raises(
         ConfigError, match=r"'exclude' value 'c' for axis 'x' matches no axis value"
     ):
@@ -1956,9 +1952,7 @@ def test_iter_plan_exclude_unknown_value():
 def test_iter_plan_exclude_value_type_mismatch():
     # Comparison is raw: the string "1" can never match an int axis value, so
     # the rule is rejected instead of silently excluding nothing.
-    config = {
-        "matrix": {"m": {"nums": [1, 2], "tasks": ["t"], "exclude": [{"nums": "1"}]}}
-    }
+    config = {"matrix": {"m": {"nums": [1, 2], "tasks": ["t"], "exclude": [{"nums": "1"}]}}}
     with pytest.raises(
         ConfigError, match=r"'exclude' value '1' for axis 'nums' matches no axis value"
     ):

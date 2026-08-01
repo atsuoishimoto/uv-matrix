@@ -196,9 +196,7 @@ def _load_envfiles(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
     result: dict[str, str] = {}
     for entry in paths:
         if not isinstance(entry, str):
-            raise TaskError(
-                f"{owner}: envfile entry must be a string, got {type(entry).__name__}"
-            )
+            raise TaskError(f"{owner}: envfile entry must be a string, got {type(entry).__name__}")
         path = render_string(entry, ctx)
         if not Path(path).is_file():
             raise TaskError(f"{owner}: envfile {path!r} not found")
@@ -222,8 +220,7 @@ def _rendered_env(raw: Any, owner: str, ctx: dict[str, Any]) -> dict[str, str]:
     for key, value in raw.items():
         if not isinstance(value, str):
             raise TaskError(
-                f"{owner}: env value for {str(key)!r} must be a string, "
-                f"got {type(value).__name__}"
+                f"{owner}: env value for {str(key)!r} must be a string, got {type(value).__name__}"
             )
         result[str(key)] = render_string(value, ctx)
     return result

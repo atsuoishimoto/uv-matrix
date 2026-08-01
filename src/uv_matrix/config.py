@@ -106,7 +106,9 @@ def _reject_unknown_keys(table: dict[str, Any], known: frozenset[str], owner: st
     if unknown:
         names = ", ".join(repr(key) for key in unknown)
         noun = "key" if len(unknown) == 1 else "keys"
-        raise ConfigError(f"{owner}: unknown {noun} {names}; known keys: {', '.join(sorted(known))}")
+        raise ConfigError(
+            f"{owner}: unknown {noun} {names}; known keys: {', '.join(sorted(known))}"
+        )
 
 
 def validate_config_names(config: dict[str, Any]) -> None:
