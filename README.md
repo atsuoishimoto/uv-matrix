@@ -102,6 +102,7 @@ uv-matrix run --matrix test              # run one matrix
 uv-matrix run --filter webui=django      # select jobs by axis value
 uv-matrix run --task lint                # run one task wherever it appears
 uv-matrix run --max-jobs 4               # run up to 4 jobs at once
+uv-matrix run --continue-on-error        # keep going past failures (--no-continue-on-error stops); overrides pyproject.toml
 uv-matrix run --dry-run                  # print commands without running them
 uv-matrix run --task run_test -- -k slow # pass extra args as {{ posargs }}
 uv-matrix list                           # list selectable jobs

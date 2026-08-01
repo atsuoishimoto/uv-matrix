@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `uv-matrix run` gained `--continue-on-error`/`--no-continue-on-error`,
+  overriding both the task-level and the global `continue-on-error` settings
+  in `pyproject.toml` for that invocation. Failing jobs still count toward
+  the exit code either way.
+
 ## 0.0.6 2026/08/01
 
 - **Breaking change**: the reserved `platform` context name is now the
